@@ -1,0 +1,15 @@
+# .gitignore for Presensi-MTs-PIQ
+
+# Gemini and IDE configs
+.gemini/
+.agents/
+.vscode/
+.idea/
+
+# OS metadata files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Log files
+*.log

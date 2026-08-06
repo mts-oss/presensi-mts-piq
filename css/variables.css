@@ -1,0 +1,58 @@
+/* css/variables.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+
+:root {
+  /* Brand Colors - Green Islamic */
+  --primary:        #1a7a4a;
+  --primary-dark:   #145e38;
+  --primary-light:  #2ea065;
+  --primary-pale:   #e8f5ed;
+  --primary-tint:   #f0faf4;
+
+  /* Status Colors */
+  --hadir:    #16a34a;
+  --hadir-bg: #dcfce7;
+  --izin:     #d97706;
+  --izin-bg:  #fef3c7;
+  --sakit:    #2563eb;
+  --sakit-bg: #dbeafe;
+  --alpa:     #dc2626;
+  --alpa-bg:  #fee2e2;
+
+  /* Neutral */
+  --white:      #ffffff;
+  --bg:         #f5f7f6;
+  --bg-card:    #ffffff;
+  --border:     #e2e8e5;
+  --border-mid: #c8d8d1;
+
+  /* Text */
+  --text:       #1a2b23;
+  --text-sub:   #4a6358;
+  --text-muted: #7a9688;
+  --text-inv:   #ffffff;
+
+  /* Typography */
+  --font-body:  'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-title: 'Plus Jakarta Sans', 'Inter', sans-serif;
+
+  /* Spacing & Sizing */
+  --radius-sm:  6px;
+  --radius:     10px;
+  --radius-lg:  16px;
+  --radius-xl:  24px;
+  --shadow-sm:  0 1px 4px rgba(26,122,74,0.07);
+  --shadow:     0 2px 12px rgba(26,122,74,0.10);
+  --shadow-lg:  0 8px 32px rgba(26,122,74,0.14);
+
+  /* Layout */
+  --header-h:      52px;
+  --sidebar-w:     220px;
+  --bottom-nav-h:  56px;
+
+  /* Transitions */
+  --ease:   cubic-bezier(0.4,0,0.2,1);
+  --dur:    180ms;
+}
+
+/* Dark mode dinonaktifkan — aplikasi selalu tampil terang */

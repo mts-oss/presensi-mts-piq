@@ -1,0 +1,90 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- SEO -->
+  <title>Presensi Online MTs PIQ Singosari Malang</title>
+  <meta name="description" content="Aplikasi Presensi Siswa Online berbasis jadwal untuk MTs PIQ Singosari Malang. Cepat, ringan, mobile-first.">
+  <meta name="theme-color" content="#1a7a4a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="./css/variables.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/app.css">
+
+  <!-- SheetJS for Excel export (loaded async) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN (rendered by JS) -->
+  <div id="app-login" style="display:none"></div>
+
+  <!-- APP SHELL -->
+  <div id="app-shell" style="display:flex;flex-direction:column">
+
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="header-logo-mark">MTs</div>
+        <div>
+          <div class="header-title">MTs PIQ Singosari</div>
+          <div class="header-sub">Presensi Siswa Online</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div style="display:flex;align-items:center;gap:0.35rem;font-size:0.72rem;color:rgba(255,255,255,0.85)" id="hdr-user-name-wrap">
+          <div id="hdr-user-avatar"
+            style="width:26px;height:26px;background:rgba(255,255,255,0.2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:700;color:white">
+            AD
+          </div>
+          <span id="hdr-user-name" class="hide-mobile">Admin</span>
+        </div>
+        <button class="header-btn" id="btn-logout-header" title="Keluar">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Layout: Sidebar + Content -->
+    <div id="layout" style="flex:1;display:flex">
+
+      <!-- Sidebar (desktop only) -->
+      <aside class="sidebar">
+        <nav id="sidebar-nav" style="flex:1"></nav>
+        <div class="sidebar-user">
+          <div class="row" style="gap:0.5rem;margin-bottom:0.5rem">
+            <div class="sidebar-avatar" id="sidebar-avatar">AD</div>
+            <div style="min-width:0">
+              <div class="sidebar-user-name" id="sidebar-user-name">Administrator</div>
+              <div class="sidebar-user-role" id="sidebar-user-role">Admin</div>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="btn-logout-sidebar"
+            style="width:100%;justify-content:center;color:var(--alpa)">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Keluar
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main id="main-content" class="fade-in"></main>
+    </div>
+
+    <!-- Bottom Navigation (mobile) -->
+    <nav class="bottom-nav" id="bottom-nav"></nav>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <!-- App Entry -->
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
