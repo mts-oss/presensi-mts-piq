@@ -52,6 +52,7 @@ export const DataPage = {
         <!-- Bulk Action Bar -->
         <div class="bulk-bar" id="bulk-bar" style="display:none">
           <span><b id="sel-count">0</b> item dipilih</span>
+          <button class="btn btn-warning btn-sm" id="btn-bulk-edit" style="display:none">✏️ Edit</button>
           <button class="btn btn-danger btn-sm" id="btn-bulk-del">🗑 Hapus Terpilih</button>
         </div>
 
@@ -104,8 +105,9 @@ export const DataPage = {
       this._loadTab();
     });
 
-    // Bulk delete
+    // Bulk action listeners
     c.querySelector('#btn-bulk-del').addEventListener('click', () => this._bulkDelete());
+    c.querySelector('#btn-bulk-edit').addEventListener('click', () => this._editSelected());
 
     // Bulk modal close
     const closeBulkModal = () => c.querySelector('#bulk-modal').classList.remove('active');
@@ -286,6 +288,78 @@ export const DataPage = {
     }
   },
 
+  _editSelected() {
+    if (this._selectedIds.length !== 1 || this._activeTab !== 'jam') return;
+    const id = this._selectedIds[0];
+    const dataObj = store.getJam().find(j => j.id === id);
+    if (!dataObj) return;
+
+    let editModal = this._container.querySelector('#edit-jam-modal');
+    if (!editModal) {
+      editModal = document.createElement('div');
+      editModal.id = 'edit-jam-modal';
+      editModal.className = 'modal-overlay';
+      editModal.innerHTML = `
+        <div class="modal-box" style="max-width:400px;width:96vw">
+          <div class="modal-header">
+            <h3>Edit Jam Pelajaran</h3>
+            <button class="btn-modal-close" onclick="this.closest('.modal-overlay').classList.remove('active')">&times;</button>
+          </div>
+          <div class="modal-body stack" style="gap:1rem">
+            <div>
+              <label style="font-size:0.75rem;font-weight:600">Nama</label>
+              <input type="text" id="edit-jam-nama" class="input" style="width:100%">
+            </div>
+            <div class="row" style="gap:0.5rem">
+              <div style="flex:1">
+                <label style="font-size:0.75rem;font-weight:600">Mulai</label>
+                <input type="time" id="edit-jam-mulai" class="input" style="width:100%">
+              </div>
+              <div style="flex:1">
+                <label style="font-size:0.75rem;font-weight:600">Selesai</label>
+                <input type="time" id="edit-jam-selesai" class="input" style="width:100%">
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').classList.remove('active')">Batal</button>
+            <button class="btn btn-primary" id="btn-save-edit-jam">Simpan</button>
+          </div>
+        </div>
+      `;
+      this._container.appendChild(editModal);
+    }
+
+    this._container.querySelector('#edit-jam-nama').value = dataObj.nama;
+    this._container.querySelector('#edit-jam-mulai').value = dataObj.jam_mulai;
+    this._container.querySelector('#edit-jam-selesai').value = dataObj.jam_selesai;
+    
+    const saveBtn = this._container.querySelector('#btn-save-edit-jam');
+    saveBtn.onclick = () => {
+      const nama = this._container.querySelector('#edit-jam-nama').value.trim();
+      const jam_mulai = this._container.querySelector('#edit-jam-mulai').value;
+      const jam_selesai = this._container.querySelector('#edit-jam-selesai').value;
+      
+      if (!nama || !jam_mulai || !jam_selesai) {
+        window._toast && window._toast('Harap isi semua kolom', 'error');
+        return;
+      }
+      
+      const success = store.updateJam(id, { nama, jam_mulai, jam_selesai });
+      if (success) {
+        window._toast && window._toast('Jam Pelajaran berhasil diperbarui', 'success');
+        editModal.classList.remove('active');
+        this._selectedIds = [];
+        this._loadTab();
+        this._updateBulkBar();
+      } else {
+        window._toast && window._toast('Gagal memperbarui', 'error');
+      }
+    };
+    
+    editModal.classList.add('active');
+  },
+
   _bulkDelete() {
     if (this._selectedIds.length === 0) return;
     if (!confirm(`Hapus ${this._selectedIds.length} data terpilih?`)) return;
@@ -308,9 +382,14 @@ export const DataPage = {
   _updateBulkBar() {
     const bar = this._container.querySelector('#bulk-bar');
     const sel = this._container.querySelector('#sel-count');
+    const btnEdit = this._container.querySelector('#btn-bulk-edit');
     if (!bar) return;
     bar.style.display = this._selectedIds.length > 0 ? 'flex' : 'none';
     if (sel) sel.textContent = this._selectedIds.length;
+    if (btnEdit) {
+      // Only show Edit button if exactly 1 item is selected and we're on the 'jam' tab
+      btnEdit.style.display = (this._selectedIds.length === 1 && this._activeTab === 'jam') ? 'inline-flex' : 'none';
+    }
   },
 
   // ==================================

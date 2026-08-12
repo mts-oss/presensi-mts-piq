@@ -486,6 +486,20 @@ export const store = {
     this._cloudDelete('lesson_hours', K.JAM, 'id', ids, remaining);
   },
 
+  updateJam(id, newData) {
+    const list = this.getJam();
+    const idx = list.findIndex(j => j.id === id);
+    if (idx === -1) return false;
+    
+    // Update data
+    list[idx] = { ...list[idx], ...newData };
+    ls_set(K.JAM, list);
+    
+    // Sync to cloud
+    if (_cloudReady) supaUpsert('lesson_hours', [list[idx]]);
+    return true;
+  },
+
   // ---- SCHEDULES ----
   getSchedules() { return ls_get(K.SCHEDULES, []); },
 
