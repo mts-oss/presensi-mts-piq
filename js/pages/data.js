@@ -150,15 +150,17 @@ export const DataPage = {
               <tr>
                 <th class="table-check"><input type="checkbox" id="chk-all"></th>
                 ${cols.map(c=>`<th>${c.label}</th>`).join('')}
+                ${tab === 'jam' ? `<th style="width:70px;text-align:center">Aksi</th>` : ''}
               </tr>
             </thead>
             <tbody id="tbl-body">
               ${rows.length === 0
-                ? `<tr><td colspan="${cols.length+1}" style="text-align:center;color:var(--text-muted);padding:2rem">Belum ada data</td></tr>`
+                ? `<tr><td colspan="${cols.length+(tab==='jam'?2:1)}" style="text-align:center;color:var(--text-muted);padding:2rem">Belum ada data</td></tr>`
                 : rows.map(row => `
                   <tr>
                     <td><input type="checkbox" class="row-chk" data-id="${row.__id}"></td>
                     ${cols.map(c => `<td>${this._escHtml(String(row[c.key]||''))}</td>`).join('')}
+                    ${tab === 'jam' ? `<td style="text-align:center"><button class="btn btn-ghost btn-sm btn-edit-row" data-id="${row.__id}" title="Edit Jam Pelajaran" style="padding:0.2rem 0.5rem">✏️ Edit</button></td>` : ''}
                   </tr>
                 `).join('')
               }
@@ -180,7 +182,16 @@ export const DataPage = {
       this._updateBulkBar();
     });
 
-    // Individual checkbox
+    // Individual checkbox & row edit button
+    content.querySelector('#tbl-body')?.addEventListener('click', e => {
+      const editBtn = e.target.closest('.btn-edit-row');
+      if (editBtn) {
+        const id = parseInt(editBtn.dataset.id) || editBtn.dataset.id;
+        this._editSelected(id);
+        return;
+      }
+    });
+
     content.querySelector('#tbl-body')?.addEventListener('change', e => {
       if (!e.target.classList.contains('row-chk')) return;
       const id = parseInt(e.target.dataset.id) || e.target.dataset.id;
@@ -288,9 +299,9 @@ export const DataPage = {
     }
   },
 
-  _editSelected() {
-    if (this._selectedIds.length !== 1 || this._activeTab !== 'jam') return;
-    const id = this._selectedIds[0];
+  _editSelected(directId = null) {
+    const id = directId || (this._selectedIds.length === 1 ? this._selectedIds[0] : null);
+    if (!id || this._activeTab !== 'jam') return;
     const dataObj = store.getJam().find(j => j.id === id);
     if (!dataObj) return;
 
