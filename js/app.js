@@ -1,10 +1,10 @@
 /* js/app.js */
-import { store } from './store.js';
-import { auth } from './auth.js';
-import { DashboardPage } from './pages/dashboard.js';
-import { PresensiPage }  from './pages/presensi.js';
-import { DataPage }      from './pages/data.js';
-import { LaporanPage }   from './pages/laporan.js';
+import { store } from './store.js?v=20260813';
+import { auth } from './auth.js?v=20260813';
+import { DashboardPage } from './pages/dashboard.js?v=20260813';
+import { PresensiPage }  from './pages/presensi.js?v=20260813';
+import { DataPage }      from './pages/data.js?v=20260813';
+import { LaporanPage }   from './pages/laporan.js?v=20260813';
 
 // =========================================
 // TOAST NOTIFICATIONS
