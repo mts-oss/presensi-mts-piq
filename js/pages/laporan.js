@@ -79,7 +79,7 @@ export const LaporanPage = {
           const daySessions = mySessions.filter(s=>s.tanggal===date);
           const recs = [];
           daySessions.forEach(sess => {
-            const rec = allAtt.find(a=>a.session_id===sess.id&&a.student_id===stu.id);
+            const rec = allAtt.find(a => String(a.session_id) === String(sess.id) && String(a.student_id) === String(stu.id));
             if (rec) recs.push(rec.status);
           });
           // Dominant: A > S > I > H
@@ -311,8 +311,8 @@ export const LaporanPage = {
                   // Each teacher may have multiple schedules (different jam/class)
                   // Group by lesson_hour_id for rows
                   const sortedScheds = [...t.schedules].sort((a, b) => {
-                    const ja = jam.find(j => j.id === a.lesson_hour_id);
-                    const jb = jam.find(j => j.id === b.lesson_hour_id);
+                    const ja = jam.find(j => String(j.id) === String(a.lesson_hour_id));
+                    const jb = jam.find(j => String(j.id) === String(b.lesson_hour_id));
                     return (ja?.urutan || 0) - (jb?.urutan || 0);
                   });
 
@@ -321,8 +321,8 @@ export const LaporanPage = {
                   const borderClr = allDone ? '#86efac' : '#fca5a5';
 
                   return sortedScheds.map((sch, schIdx) => {
-                    const j       = jam.find(x => x.id === sch.lesson_hour_id);
-                    const mapel   = subjects.find(s => s.id === sch.subject_id);
+                    const j       = jam.find(x => String(x.id) === String(sch.lesson_hour_id));
+                    const mapel   = subjects.find(s => String(s.id) === String(sch.subject_id));
                     const isDone  = sch.done;
                     const cellBg  = isDone ? '#dcfce7' : '#fee2e2';
                     const cellClr = isDone ? '#15803d' : '#b91c1c';
@@ -340,7 +340,7 @@ export const LaporanPage = {
                     // Build class cells
                     const classCells = gridClasses.map(cls => {
                       // Does this teacher schedule match this class?
-                      if (sch.class_id === cls.id) {
+                      if (String(sch.class_id) === String(cls.id)) {
                         return `
                           <td style="border:1px solid ${cellBdr};padding:0.4rem 0.5rem;text-align:center;background:${cellBg};font-weight:700;font-size:0.85rem;color:${cellClr}">
                             ${isDone ? '✓' : '✗'}

@@ -166,7 +166,7 @@ async function supaSelect(table, params = '') {
 }
 
 /** UPSERT (insert or update) rows */
-async function supaUpsert(table, rows) {
+async function supaUpsert(table, rows, onConflict = '') {
   if (!rows || rows.length === 0) return { data: [], error: null };
   // Remove created_at from data to let DB set it
   const cleaned = rows.map(r => {
@@ -174,8 +174,10 @@ async function supaUpsert(table, rows) {
     delete copy.created_at;
     return copy;
   });
+  const params = onConflict ? `on_conflict=${encodeURIComponent(onConflict)}` : '';
   return supaFetch(table, {
     method: 'POST',
+    params,
     body: cleaned,
     prefer: 'resolution=merge-duplicates,return=representation',
   });
@@ -569,73 +571,109 @@ export const store = {
   getAttendances() { return ls_get(K.ATTENDANCES, []); },
 
   /** Save or update a session + attendance records */
-  saveAttendance(scheduleId, tanggal, teacherId, classId, subjectId, lessonHourId, materi, catatanJurnal, records) {
+  async saveAttendance(scheduleId, tanggal, teacherId, classId, subjectId, lessonHourId, materi, catatanJurnal, records) {
     const sessions = this.getSessions();
     const attendances = this.getAttendances();
 
     // Find existing session for this schedule+date combination
-    let session = sessions.find(s => s.schedule_id === scheduleId && s.tanggal === tanggal);
-    let sessionId;
+    let session = sessions.find(s => String(s.schedule_id) === String(scheduleId) && s.tanggal === tanggal);
 
-    if (session) {
-      session.materi = materi || '';
-      session.catatan_jurnal = catatanJurnal || '';
-      session.teacher_id = teacherId;
-      sessionId = session.id;
-    } else {
-      sessionId = Date.now();
-      sessions.push({
-        id: sessionId,
-        tanggal,
-        schedule_id: scheduleId,
-        teacher_id: teacherId,
-        class_id: classId,
-        subject_id: subjectId,
-        lesson_hour_id: lessonHourId,
-        materi: materi || '',
-        catatan_jurnal: catatanJurnal || ''
-      });
-    }
+    const sessionPayload = {
+      tanggal,
+      schedule_id: Number(scheduleId),
+      teacher_id: teacherId,
+      class_id: Number(classId),
+      subject_id: Number(subjectId),
+      lesson_hour_id: Number(lessonHourId),
+      materi: materi || '',
+      catatan_jurnal: catatanJurnal || ''
+    };
 
-    // Replace attendance records for this session
-    const cleaned = attendances.filter(a => a.session_id !== sessionId);
-    const newAttendances = [];
-    records.forEach((r, i) => {
-      const att = {
+    let realSessionId = null;
+
+    if (_cloudReady) {
+      // Upsert attendance_sessions with on_conflict=tanggal,schedule_id
+      const payloadToSend = { ...sessionPayload };
+      if (session && session.id) {
+        payloadToSend.id = session.id;
+      }
+
+      const { data: savedSessions, error: sessErr } = await supaUpsert('attendance_sessions', [payloadToSend], 'tanggal,schedule_id');
+      if (sessErr || !savedSessions || savedSessions.length === 0) {
+        console.error('[Store] Failed to save attendance_sessions:', sessErr);
+        throw new Error(sessErr || 'Gagal menyimpan sesi absensi ke cloud');
+      }
+
+      const dbSession = savedSessions[0];
+      realSessionId = dbSession.id;
+
+      // Prepare attendance records linked to realSessionId
+      const newAttendances = records.map((r, i) => ({
         id: Date.now() + i + Math.floor(Math.random() * 999),
-        session_id: sessionId,
-        student_id: r.student_id,
+        session_id: realSessionId,
+        student_id: Number(r.student_id),
         status: r.status,
         catatan: r.catatan || '',
         umpan_balik: r.umpan_balik || ''
-      };
-      cleaned.push(att);
-      newAttendances.push(att);
-    });
+      }));
 
-    ls_set(K.SESSIONS, sessions);
-    ls_set(K.ATTENDANCES, cleaned);
+      // Delete old attendances for this session in cloud first
+      await supaDelete('attendances', 'session_id', [realSessionId]);
 
-    // Cloud sync
-    if (_cloudReady) {
-      // Upsert the session
-      const sessionToSave = sessions.find(s => s.id === sessionId);
-      supaUpsert('attendance_sessions', [sessionToSave]);
-      // Delete old attendances for this session, then insert new
-      supaDelete('attendances', 'session_id', [sessionId]).then(() => {
-        supaUpsert('attendances', newAttendances);
+      // Insert new attendances into cloud
+      const { data: savedAttendances, error: attErr } = await supaUpsert('attendances', newAttendances);
+      if (attErr) {
+        console.error('[Store] Failed to save attendances:', attErr);
+        throw new Error(attErr || 'Gagal menyimpan detail presensi siswa ke cloud');
+      }
+
+      // Update LocalStorage cache with the verified cloud records
+      const updatedSessions = sessions.filter(s => !(String(s.schedule_id) === String(scheduleId) && s.tanggal === tanggal));
+      updatedSessions.push(dbSession);
+      ls_set(K.SESSIONS, updatedSessions);
+
+      const updatedAttendances = attendances.filter(a => String(a.session_id) !== String(realSessionId));
+      (savedAttendances && savedAttendances.length > 0 ? savedAttendances : newAttendances).forEach(a => {
+        updatedAttendances.push(a);
       });
-    }
+      ls_set(K.ATTENDANCES, updatedAttendances);
 
-    return sessionId;
+      return realSessionId;
+    } else {
+      // Offline fallback
+      let sessionId = session ? session.id : Date.now();
+      const localSession = {
+        id: sessionId,
+        ...sessionPayload
+      };
+
+      const updatedSessions = sessions.filter(s => !(String(s.schedule_id) === String(scheduleId) && s.tanggal === tanggal));
+      updatedSessions.push(localSession);
+      ls_set(K.SESSIONS, updatedSessions);
+
+      const newAttendances = records.map((r, i) => ({
+        id: Date.now() + i + Math.floor(Math.random() * 999),
+        session_id: sessionId,
+        student_id: Number(r.student_id),
+        status: r.status,
+        catatan: r.catatan || '',
+        umpan_balik: r.umpan_balik || ''
+      }));
+
+      const updatedAttendances = attendances.filter(a => String(a.session_id) !== String(sessionId));
+      newAttendances.forEach(a => updatedAttendances.push(a));
+      ls_set(K.ATTENDANCES, updatedAttendances);
+
+      return sessionId;
+    }
   },
 
   getSessionForSchedule(scheduleId, tanggal) {
-    return this.getSessions().find(s => s.schedule_id === scheduleId && s.tanggal === tanggal);
+    return this.getSessions().find(s => String(s.schedule_id) === String(scheduleId) && s.tanggal === tanggal);
   },
 
   getAttendancesForSession(sessionId) {
-    return this.getAttendances().filter(a => a.session_id === sessionId);
+    return this.getAttendances().filter(a => String(a.session_id) === String(sessionId));
   },
 
   // ---- STATS ----
@@ -645,7 +683,7 @@ export const store = {
     const allAtt = this.getAttendances();
     let H=0, I=0, S=0, A=0, total=0;
     sessions.forEach(s => {
-      const recs = allAtt.filter(a => a.session_id === s.id);
+      const recs = allAtt.filter(a => String(a.session_id) === String(s.id));
       recs.forEach(r => {
         total++;
         if (r.status==='H') H++;
@@ -660,12 +698,12 @@ export const store = {
   /** Get attendance percentage for a class over a date range */
   getClassAttendanceStat(classId, from, to) {
     const sessions = this.getSessions().filter(s =>
-      s.class_id === parseInt(classId) && s.tanggal >= from && s.tanggal <= to
+      String(s.class_id) === String(classId) && s.tanggal >= from && s.tanggal <= to
     );
     const allAtt = this.getAttendances();
     let H=0, total=0;
     sessions.forEach(s => {
-      const recs = allAtt.filter(a => a.session_id === s.id);
+      const recs = allAtt.filter(a => String(a.session_id) === String(s.id));
       recs.forEach(r => { total++; if(r.status==='H') H++; });
     });
     return { H, total, pct: total > 0 ? Math.round(H/total*100) : 0 };
@@ -683,13 +721,13 @@ export const store = {
 
     // For each teacher, find their schedules on that day and check if session exists
     return teachers.map(teacher => {
-      const myScheds = schedules.filter(s => s.teacher_id === teacher.id && s.hari === hari);
+      const myScheds = schedules.filter(s => String(s.teacher_id) === String(teacher.id) && s.hari === hari);
       const schedDetails = myScheds.map(s => ({
         schedule_id: s.id,
         class_id: s.class_id,
         subject_id: s.subject_id,
         lesson_hour_id: s.lesson_hour_id,
-        done: sessions.some(sess => sess.schedule_id === s.id)
+        done: sessions.some(sess => String(sess.schedule_id) === String(s.id))
       }));
       return {
         teacher,
@@ -700,7 +738,6 @@ export const store = {
     }).filter(t => t.total > 0);
   },
 
-
   /** Get student monthly attendance summary */
   getStudentMonthSummary(studentId, year, month) {
     const prefix = `${year}-${String(month).padStart(2,'0')}`;
@@ -708,7 +745,7 @@ export const store = {
     const allAtt = this.getAttendances();
     const result = { H:0, I:0, S:0, A:0, total:0, days: {} };
     sessions.forEach(s => {
-      const rec = allAtt.find(a => a.session_id === s.id && a.student_id === parseInt(studentId));
+      const rec = allAtt.find(a => String(a.session_id) === String(s.id) && String(a.student_id) === String(studentId));
       if (rec) {
         result.total++;
         result[rec.status]++;

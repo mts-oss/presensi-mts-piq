@@ -546,31 +546,46 @@ export const PresensiPage = {
     });
 
     // Save attendance
-    container.querySelector('#btn-simpan').addEventListener('click', () => {
+    container.querySelector('#btn-simpan').addEventListener('click', async () => {
+      const btnSimpan = container.querySelector('#btn-simpan');
+      const originalText = btnSimpan.innerHTML;
+      btnSimpan.disabled = true;
+      btnSimpan.innerHTML = `
+        <svg class="spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+        Menyimpan...
+      `;
+
       const materi = container.querySelector('#inp-materi').value.trim();
       const jurnal = container.querySelector('#inp-jurnal').value.trim();
       this._state.materi = materi;
       this._state.catatanJurnal = jurnal;
 
-      store.saveAttendance(
-        schedule.id,
-        this._state.tanggal,
-        this._user.id,
-        schedule.class_id,
-        schedule.subject_id,
-        schedule.lesson_hour_id,
-        materi,
-        jurnal,
-        this._state.students.map(s => ({
-          student_id: s.student_id,
-          status:     s.status,
-          catatan:    s.catatan,
-          umpan_balik:s.umpan_balik
-        }))
-      );
+      try {
+        await store.saveAttendance(
+          schedule.id,
+          this._state.tanggal,
+          this._user.id,
+          schedule.class_id,
+          schedule.subject_id,
+          schedule.lesson_hour_id,
+          materi,
+          jurnal,
+          this._state.students.map(s => ({
+            student_id: s.student_id,
+            status:     s.status,
+            catatan:    s.catatan,
+            umpan_balik:s.umpan_balik
+          }))
+        );
 
-      window._toast && window._toast('Presensi & jurnal berhasil disimpan! ✓', 'success');
-      this._renderScheduleList(container);
+        window._toast && window._toast('Presensi & jurnal berhasil disimpan! ✓', 'success');
+        this._renderScheduleList(container);
+      } catch (err) {
+        console.error('[Presensi] Gagal menyimpan:', err);
+        window._toast && window._toast('⚠ Gagal menyimpan presensi: ' + (err.message || err), 'error');
+        btnSimpan.disabled = false;
+        btnSimpan.innerHTML = originalText;
+      }
     });
   },
 
