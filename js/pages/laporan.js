@@ -246,12 +246,17 @@ export const LaporanPage = {
 
           <!-- Date filter -->
           <div class="card" style="padding:0.75rem">
-            <div class="row" style="gap:0.75rem;align-items:flex-end">
-              <div class="form-group" style="margin:0">
-                <label>Tanggal</label>
-                <input type="date" id="sel-date" class="form-control" value="${selDate}" style="font-size:0.82rem">
+            <div class="row" style="gap:0.75rem;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
+              <div class="row" style="gap:0.75rem;align-items:flex-end">
+                <div class="form-group" style="margin:0">
+                  <label>Tanggal</label>
+                  <input type="date" id="sel-date" class="form-control" value="${selDate}" style="font-size:0.82rem">
+                </div>
+                <div style="font-size:0.9rem;font-weight:700;color:var(--primary)">${hari}</div>
               </div>
-              <div style="font-size:0.9rem;font-weight:700;color:var(--primary)">${hari}</div>
+              <button class="btn btn-outline btn-sm" id="btn-sync-cloud" title="Muat ulang seluruh data terbaru dari cloud">
+                🔄 Sync Data Cloud
+              </button>
             </div>
           </div>
 
@@ -397,6 +402,21 @@ export const LaporanPage = {
       content.querySelector('#sel-date')?.addEventListener('change', e => {
         selDate = e.target.value;
         render();
+      });
+
+      content.querySelector('#btn-sync-cloud')?.addEventListener('click', async () => {
+        const btn = content.querySelector('#btn-sync-cloud');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.innerHTML = '🔄 Syncing...';
+        try {
+          await store.forceSyncAll();
+          if (window._toast) window._toast('✓ Data berhasil diperbarui dari cloud!', 'success');
+        } catch (e) {
+          console.error(e);
+        } finally {
+          render();
+        }
       });
     };
 

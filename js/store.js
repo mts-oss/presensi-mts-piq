@@ -305,6 +305,12 @@ export const store = {
     window.dispatchEvent(new CustomEvent('cloud-sync-done'));
   },
 
+  async forceSyncAll() {
+    if (this._cloudReady) {
+      await this._syncAllFromCloud();
+    }
+  },
+
   /** Write to both cloud and localStorage. Returns true if cloud write succeeded. */
   async _cloudWrite(table, localKey, newData) {
     // Always update localStorage first (optimistic)
@@ -746,7 +752,10 @@ export const store = {
         class_id: s.class_id,
         subject_id: s.subject_id,
         lesson_hour_id: s.lesson_hour_id,
-        done: sessions.some(sess => String(sess.schedule_id) === String(s.id))
+        done: sessions.some(sess =>
+          String(sess.schedule_id) === String(s.id) ||
+          (String(sess.class_id) === String(s.class_id) && String(sess.lesson_hour_id) === String(s.lesson_hour_id))
+        )
       }));
       return {
         teacher,
