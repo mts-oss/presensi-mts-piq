@@ -445,7 +445,7 @@ export const store = {
     const newSubjects = [];
     arr.forEach((s, i) => {
       const subj = {
-        id: Date.now() + i + Math.floor(Math.random()*999),
+        id: Date.now() * 1000 + i,
         idm: (s.idm || '').trim(),
         pelajaran: (s.pelajaran || s.nama || '').trim()
       };
@@ -543,7 +543,7 @@ export const store = {
       } else {
         // Tambah jadwal baru
         const sched = {
-          id: Date.now() + i + Math.floor(Math.random() * 999),
+          id: Date.now() * 1000 + i,
           class_id: classId,
           subject_id: subjectId,
           teacher_id: s.teacher_id,
@@ -608,8 +608,9 @@ export const store = {
       realSessionId = dbSession.id;
 
       // Prepare attendance records linked to realSessionId
+      const timestamp = Date.now();
       const newAttendances = records.map((r, i) => ({
-        id: Date.now() + i + Math.floor(Math.random() * 999),
+        id: timestamp * 1000 + i,
         session_id: realSessionId,
         student_id: Number(r.student_id),
         status: r.status,
@@ -651,8 +652,9 @@ export const store = {
       updatedSessions.push(localSession);
       ls_set(K.SESSIONS, updatedSessions);
 
+      const timestamp = Date.now();
       const newAttendances = records.map((r, i) => ({
-        id: Date.now() + i + Math.floor(Math.random() * 999),
+        id: timestamp * 1000 + i,
         session_id: sessionId,
         student_id: Number(r.student_id),
         status: r.status,
