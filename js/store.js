@@ -166,14 +166,15 @@ async function supaSelect(table, params = '') {
 }
 
 /** SELECT ALL rows from a table (handles pagination beyond Supabase 1000 row limit) */
-async function supaSelectAll(table, params = '') {
+async function supaSelectAll(table, defaultOrder = '') {
   let allData = [];
   let offset = 0;
   const limit = 1000;
 
   while (true) {
-    const pageParams = `order=id.desc&limit=${limit}&offset=${offset}` + (params ? '&' + params : '');
-    const { data, error } = await supaSelect(table, pageParams);
+    const orderParam = defaultOrder ? `order=${encodeURIComponent(defaultOrder)}&` : '';
+    const pageParams = `${orderParam}limit=${limit}&offset=${offset}`;
+    const { data, error } = await supaFetch(table, { method: 'GET', params: 'select=*&' + pageParams });
     if (error || !data || data.length === 0) {
       if (allData.length > 0) return { data: allData, error: null };
       return { data: allData.length > 0 ? allData : null, error };
@@ -284,19 +285,18 @@ export const store = {
 
   async _syncAllFromCloud() {
     const tables = [
-      ['users',               K.USERS],
-      ['classes',             K.CLASSES],
-      ['students',            K.STUDENTS],
-      ['subjects',            K.SUBJECTS],
-      ['lesson_hours',        K.JAM],
-      ['schedules',           K.SCHEDULES],
-      ['attendance_sessions', K.SESSIONS],
-      ['attendances',         K.ATTENDANCES],
+      ['users',               K.USERS,       ''],
+      ['classes',             K.CLASSES,     ''],
+      ['students',            K.STUDENTS,    ''],
+      ['subjects',            K.SUBJECTS,    ''],
+      ['lesson_hours',        K.JAM,         'urutan.asc'],
+      ['schedules',           K.SCHEDULES,   ''],
+      ['attendance_sessions', K.SESSIONS,    'created_at.desc'],
+      ['attendances',         K.ATTENDANCES, 'created_at.desc'],
     ];
-    for (const [tbl, key] of tables) {
-      const { data, error } = await supaSelectAll(tbl);
+    for (const [tbl, key, ord] of tables) {
+      const { data, error } = await supaSelectAll(tbl, ord);
       if (!error && data) {
-        // PERBAIKAN: Gunakan data dari cloud sebagai sumber kebenaran (source of truth).
         ls_set(key, data);
       }
     }
@@ -785,7 +785,13 @@ export const store = {
     const days = ['Ahad','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
     return days[new Date().getDay()];
   },
-  todayISO() { return new Date().toISOString().split('T')[0]; }
+  todayISO() {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 };
 
 store.init();
