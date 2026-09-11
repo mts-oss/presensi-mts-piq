@@ -98,7 +98,10 @@ export const PresensiPage = {
               const kelas  = classes.find(c=>String(c.id)===String(sch.class_id));
               const mapel  = subjects.find(s=>String(s.id)===String(sch.subject_id));
               const teacher= teachers.find(t=>String(t.id)===String(sch.teacher_id));
-              const isDone = sessions.some(sess=>String(sess.schedule_id)===String(sch.id));
+              const isDone = sessions.some(sess =>
+                String(sess.schedule_id) === String(sch.id) ||
+                (String(sess.class_id) === String(sch.class_id) && String(sess.lesson_hour_id) === String(sch.lesson_hour_id))
+              );
               const siswaCount = store.getStudentsByClass(sch.class_id).length;
 
               return `
@@ -124,10 +127,11 @@ export const PresensiPage = {
         </div>
       `;
 
-      // Day chip events
+      // Day chip events: Auto-sync date when day chip is clicked
       container.querySelectorAll('.chip[data-day]').forEach(btn => {
         btn.addEventListener('click', () => {
           this._state.selectedDay = btn.dataset.day;
+          this._state.tanggal = this._getDateForDay(btn.dataset.day, this._state.tanggal);
           rebuild();
         });
       });
@@ -627,5 +631,23 @@ export const PresensiPage = {
   _escHtml(s) {
     if (!s) return '';
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  },
+
+  _getDateForDay(dayName, currentTanggal) {
+    const HARI_MAP = { 'Senin':1, 'Selasa':2, 'Rabu':3, 'Kamis':4, 'Jumat':5, 'Sabtu':6, 'Ahad':0 };
+    const targetDayIdx = HARI_MAP[dayName];
+    if (targetDayIdx === undefined) return currentTanggal;
+
+    const baseStr = currentTanggal || store.todayISO();
+    const curDate = new Date(baseStr + 'T00:00:00');
+    const curDayIdx = curDate.getDay();
+
+    const diff = targetDayIdx - curDayIdx;
+    curDate.setDate(curDate.getDate() + diff);
+
+    const year = curDate.getFullYear();
+    const month = String(curDate.getMonth() + 1).padStart(2, '0');
+    const day = String(curDate.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 };
