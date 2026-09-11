@@ -165,6 +165,26 @@ async function supaSelect(table, params = '') {
   return supaFetch(table, { method: 'GET', params: 'select=*' + (params ? '&' + params : '') });
 }
 
+/** SELECT ALL rows from a table (handles pagination beyond Supabase 1000 row limit) */
+async function supaSelectAll(table, params = '') {
+  let allData = [];
+  let offset = 0;
+  const limit = 1000;
+
+  while (true) {
+    const pageParams = `order=id.desc&limit=${limit}&offset=${offset}` + (params ? '&' + params : '');
+    const { data, error } = await supaSelect(table, pageParams);
+    if (error || !data || data.length === 0) {
+      if (allData.length > 0) return { data: allData, error: null };
+      return { data: allData.length > 0 ? allData : null, error };
+    }
+    allData = allData.concat(data);
+    if (data.length < limit) break;
+    offset += limit;
+  }
+  return { data: allData, error: null };
+}
+
 /** UPSERT (insert or update) rows */
 async function supaUpsert(table, rows, onConflict = '') {
   if (!rows || rows.length === 0) return { data: [], error: null };
@@ -274,12 +294,9 @@ export const store = {
       ['attendances',         K.ATTENDANCES],
     ];
     for (const [tbl, key] of tables) {
-      const { data, error } = await supaSelect(tbl);
+      const { data, error } = await supaSelectAll(tbl);
       if (!error && data) {
         // PERBAIKAN: Gunakan data dari cloud sebagai sumber kebenaran (source of truth).
-        // Logika sebelumnya menggabungkan data lokal yang tidak ada di cloud,
-        // yang menyebabkan data yang sudah dihapus di cloud kembali ditambahkan
-        // oleh perangkat yang masih menyimpan cache lama di LocalStorage.
         ls_set(key, data);
       }
     }
