@@ -55,32 +55,81 @@ export const LaporanPage = {
     let selClass = store.getClasses()[0]?.id || null;
     let selYear  = now.getFullYear();
     let selMonth = now.getMonth() + 1; // 1-indexed
+    let renderToken = 0;
 
-    const render = () => {
+    const render = async (forceRefresh = false) => {
+      const currentToken = ++renderToken;
       const classes  = store.getClasses();
+      if (!selClass && classes.length > 0) selClass = classes[0].id;
       const students = store.getStudentsByClass(selClass);
       const sessions = store.getSessions();
-      const allAtt   = store.getAttendances();
 
       // Filter sessions for this class + month
       const prefix = `${selYear}-${String(selMonth).padStart(2,'0')}`;
-      const mySessions = sessions.filter(s => s.class_id === parseInt(selClass) && s.tanggal.startsWith(prefix));
+      const mySessions = sessions.filter(s => String(s.class_id) === String(selClass) && s.tanggal.startsWith(prefix));
+      const sessionIds = mySessions.map(s => s.id);
 
       // Unique dates (sorted)
       const dates = [...new Set(mySessions.map(s=>s.tanggal))].sort();
 
+      // Check if we need to fetch attendances from cloud for these sessions
+      const needsCloudFetch = store.isCloudEnabled() && sessionIds.length > 0 &&
+        (forceRefresh || !store.hasAttendancesForSessions(sessionIds));
+
+      if (needsCloudFetch) {
+        content.innerHTML = `
+          <div class="stack">
+            <div class="card" style="padding:0.75rem">
+              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
+                <div class="form-group" style="margin:0;flex:1;min-width:120px">
+                  <label>Kelas</label>
+                  <select id="sel-class" class="form-control" style="font-size:0.82rem" disabled>
+                    ${classes.map(c=>`<option value="${c.id}" ${String(c.id)===String(selClass)?'selected':''}>${c.nama_kelas}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:90px">
+                  <label>Bulan</label>
+                  <select id="sel-month" class="form-control" style="font-size:0.82rem" disabled>
+                    ${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===selMonth?'selected':''}>${m}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:80px">
+                  <label>Tahun</label>
+                  <input type="number" id="sel-year" class="form-control" value="${selYear}" style="font-size:0.82rem" disabled>
+                </div>
+              </div>
+            </div>
+            <div class="card" style="text-align:center;padding:2.5rem 1rem">
+              <div class="loader" style="padding:0.5rem"><div class="spinner"></div></div>
+              <div style="font-size:0.82rem;color:var(--text-muted);margin-top:0.5rem">
+                Memuat data absensi ${MONTHS[selMonth-1]} ${selYear} dari server...
+              </div>
+            </div>
+          </div>
+        `;
+        await store.ensureAttendancesForSessions(sessionIds, forceRefresh);
+        if (currentToken !== renderToken) return; // Abaikan jika user sudah pindah filter/tab
+      }
+
+      const allAtt = store.getAttendances();
+      const mySessionIdSet = new Set(sessionIds.map(id => String(id)));
+      const attMap = new Map();
+      allAtt.forEach(a => {
+        if (mySessionIdSet.has(String(a.session_id))) {
+          attMap.set(`${a.session_id}_${a.student_id}`, a.status);
+        }
+      });
+
       // Build matrix: student × date × [H/I/S/A]
-      // For each date, a student may have multiple sessions (different lessons)
-      // We show per-session or per-day summary — here: per SESSION (detailed)
-      // For simplicity: per date, all sessions combined → dominant status
+      // For each date, all sessions combined → dominant status (A > S > I > H)
       const matrix = students.map(stu => {
         const byDate = {};
         dates.forEach(date => {
           const daySessions = mySessions.filter(s=>s.tanggal===date);
           const recs = [];
           daySessions.forEach(sess => {
-            const rec = allAtt.find(a => String(a.session_id) === String(sess.id) && String(a.student_id) === String(stu.id));
-            if (rec) recs.push(rec.status);
+            const st = attMap.get(`${sess.id}_${stu.id}`);
+            if (st) recs.push(st);
           });
           // Dominant: A > S > I > H
           let status = recs.length > 0
@@ -101,7 +150,7 @@ export const LaporanPage = {
               <div class="form-group" style="margin:0;flex:1;min-width:120px">
                 <label>Kelas</label>
                 <select id="sel-class" class="form-control" style="font-size:0.82rem">
-                  ${classes.map(c=>`<option value="${c.id}" ${c.id===selClass?'selected':''}>${c.nama_kelas}</option>`).join('')}
+                  ${classes.map(c=>`<option value="${c.id}" ${String(c.id)===String(selClass)?'selected':''}>${c.nama_kelas}</option>`).join('')}
                 </select>
               </div>
               <div class="form-group" style="margin:0;min-width:90px">
@@ -115,6 +164,7 @@ export const LaporanPage = {
                 <input type="number" id="sel-year" class="form-control" value="${selYear}" style="font-size:0.82rem">
               </div>
               <div style="display:flex;gap:0.4rem">
+                <button class="btn btn-outline btn-sm" id="btn-refresh-rekap" title="Muat ulang data absensi dari server">🔄 Sync</button>
                 <button class="btn btn-secondary btn-sm" id="btn-exp-csv">⬇ CSV</button>
                 <button class="btn btn-primary btn-sm" id="btn-exp-print">🖨 Cetak</button>
               </div>
@@ -168,6 +218,7 @@ export const LaporanPage = {
       content.querySelector('#sel-class').addEventListener('change', e => { selClass=parseInt(e.target.value); render(); });
       content.querySelector('#sel-month').addEventListener('change', e => { selMonth=parseInt(e.target.value); render(); });
       content.querySelector('#sel-year').addEventListener('change', e => { selYear=parseInt(e.target.value); render(); });
+      content.querySelector('#btn-refresh-rekap')?.addEventListener('click', () => { render(true); });
 
       // Export CSV
       content.querySelector('#btn-exp-csv')?.addEventListener('click', () => {

@@ -102,18 +102,40 @@ const seedSchedules = [
 ];
 
 // =========================================
-// LOCAL STORAGE HELPERS (cache only)
+// IN-MEMORY + LOCAL STORAGE HELPERS
 // =========================================
+const _mem = {};
+const _loadedSessionIds = new Set();
+const MAX_LS_ATTENDANCES = 1500; // Batasi jumlah absensi di localStorage (~240KB) agar tidak melebihi kuota 5MB browser
+
 function ls_get(key, fallback) {
+  if (_mem[key] !== undefined) return _mem[key];
   try {
     const d = localStorage.getItem(key);
-    return d ? JSON.parse(d) : fallback;
+    const parsed = d ? JSON.parse(d) : fallback;
+    if (parsed !== fallback) _mem[key] = parsed;
+    return parsed;
   } catch { return fallback; }
 }
+
 function ls_set(key, value) {
+  _mem[key] = value;
   try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) { console.warn('LocalStorage write failed:', e); }
+    const toStore = (key === K.ATTENDANCES && Array.isArray(value) && value.length > MAX_LS_ATTENDANCES)
+      ? value.slice(-MAX_LS_ATTENDANCES)
+      : value;
+    localStorage.setItem(key, JSON.stringify(toStore));
+  } catch (e) {
+    console.warn('LocalStorage write warning (clearing attendance cache to free space):', e);
+    try {
+      localStorage.removeItem(K.ATTENDANCES);
+      if (key !== K.ATTENDANCES) {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
+    } catch (e2) {
+      console.warn('LocalStorage fallback failed:', e2);
+    }
+  }
 }
 
 // =========================================
@@ -166,14 +188,15 @@ async function supaSelect(table, params = '') {
 }
 
 /** SELECT ALL rows from a table (handles pagination beyond Supabase 1000 row limit) */
-async function supaSelectAll(table, defaultOrder = '') {
+async function supaSelectAll(table, defaultOrder = '', extraFilter = '') {
   let allData = [];
   let offset = 0;
   const limit = 1000;
 
   while (true) {
+    const filterParam = extraFilter ? `${extraFilter}&` : '';
     const orderParam = defaultOrder ? `order=${encodeURIComponent(defaultOrder)}&` : '';
-    const pageParams = `${orderParam}limit=${limit}&offset=${offset}`;
+    const pageParams = `${filterParam}${orderParam}limit=${limit}&offset=${offset}`;
     const { data, error } = await supaFetch(table, { method: 'GET', params: 'select=*&' + pageParams });
     if (error || !data || data.length === 0) {
       if (allData.length > 0) return { data: allData, error: null };
@@ -292,14 +315,22 @@ export const store = {
       ['lesson_hours',        K.JAM,         'urutan.asc'],
       ['schedules',           K.SCHEDULES,   ''],
       ['attendance_sessions', K.SESSIONS,    'created_at.desc'],
-      ['attendances',         K.ATTENDANCES, 'created_at.desc'],
     ];
-    for (const [tbl, key, ord] of tables) {
+    await Promise.all(tables.map(async ([tbl, key, ord]) => {
       const { data, error } = await supaSelectAll(tbl, ord);
       if (!error && data) {
         ls_set(key, data);
       }
+    }));
+
+    // Reset loaded sessions cache and load today's attendances immediately
+    _loadedSessionIds.clear();
+    const today = this.todayISO();
+    const todaySessions = this.getSessions().filter(s => s.tanggal === today);
+    if (todaySessions.length > 0) {
+      await this.ensureAttendancesForSessions(todaySessions.map(s => s.id), true);
     }
+
     console.log('[Cloud] Sync from cloud complete');
     // Dispatch event so pages can re-render if needed
     window.dispatchEvent(new CustomEvent('cloud-sync-done'));
@@ -660,6 +691,7 @@ export const store = {
       (savedAttendances && savedAttendances.length > 0 ? savedAttendances : newAttendances).forEach(a => {
         updatedAttendances.push(a);
       });
+      _loadedSessionIds.add(String(realSessionId));
       ls_set(K.ATTENDANCES, updatedAttendances);
 
       return realSessionId;
@@ -687,10 +719,47 @@ export const store = {
 
       const updatedAttendances = attendances.filter(a => String(a.session_id) !== String(sessionId));
       newAttendances.forEach(a => updatedAttendances.push(a));
+      _loadedSessionIds.add(String(sessionId));
       ls_set(K.ATTENDANCES, updatedAttendances);
 
       return sessionId;
     }
+  },
+
+  /** Check if attendances for given session IDs are already loaded from cloud */
+  hasAttendancesForSessions(sessionIds) {
+    if (!sessionIds || sessionIds.length === 0) return true;
+    return sessionIds.every(id => _loadedSessionIds.has(String(id)));
+  },
+
+  /** Fetch attendances on-demand from cloud for specific session IDs */
+  async ensureAttendancesForSessions(sessionIds, force = false) {
+    if (!_cloudReady || !sessionIds || sessionIds.length === 0) return;
+
+    const targetIds = force
+      ? [...new Set(sessionIds.map(id => String(id)))]
+      : [...new Set(sessionIds.map(id => String(id)))].filter(id => !_loadedSessionIds.has(id));
+
+    if (targetIds.length === 0) return;
+
+    const chunkSize = 150;
+    let fetchedAttendances = [];
+
+    for (let i = 0; i < targetIds.length; i += chunkSize) {
+      const chunk = targetIds.slice(i, i + chunkSize);
+      const filter = `session_id=in.(${chunk.join(',')})`;
+      const { data, error } = await supaSelectAll('attendances', 'id.asc', filter);
+      if (!error && data) {
+        fetchedAttendances = fetchedAttendances.concat(data);
+      }
+    }
+
+    const targetSet = new Set(targetIds);
+    const existing = this.getAttendances().filter(a => !targetSet.has(String(a.session_id)));
+    const merged = existing.concat(fetchedAttendances);
+
+    targetIds.forEach(id => _loadedSessionIds.add(id));
+    ls_set(K.ATTENDANCES, merged);
   },
 
   getSessionForSchedule(scheduleId, tanggal) {

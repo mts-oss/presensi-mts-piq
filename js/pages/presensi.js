@@ -161,7 +161,7 @@ export const PresensiPage = {
   // ==================================
   // STEP 2: ABSENSI FORM
   // ==================================
-  _renderAbsensiForm(container) {
+  async _renderAbsensiForm(container) {
     const schedId = this._state.selectedScheduleId;
     const tanggal = this._state.tanggal;
     const schedules = store.getSchedules();
@@ -177,6 +177,15 @@ export const PresensiPage = {
     const j       = jam.find(x=>String(x.id)===String(schedule.lesson_hour_id));
     const kelas   = classes.find(c=>String(c.id)===String(schedule.class_id));
     const mapel   = subjects.find(s=>String(s.id)===String(schedule.subject_id));
+
+    // Ensure attendances for all sessions of this class on this date are loaded from cloud
+    const classDateSessions = store.getSessions().filter(
+      s => s.tanggal === tanggal && String(s.class_id) === String(schedule.class_id)
+    );
+    if (store.isCloudEnabled() && classDateSessions.length > 0 && !store.hasAttendancesForSessions(classDateSessions.map(s => s.id))) {
+      container.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+      await store.ensureAttendancesForSessions(classDateSessions.map(s => s.id));
+    }
 
     // Load existing session
     const existingSession = store.getSessionForSchedule(schedId, tanggal);
@@ -208,7 +217,7 @@ export const PresensiPage = {
     // Build student records
     const students = store.getStudentsByClass(schedule.class_id);
     this._state.students = students.map(stu => {
-      const rec = existingAttendances.find(a=>a.student_id===stu.id);
+      const rec = existingAttendances.find(a=>String(a.student_id)===String(stu.id));
       return {
         student_id: stu.id,
         ids: stu.ids,
