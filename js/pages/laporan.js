@@ -559,7 +559,20 @@ export const LaporanPage = {
         // ───────────────────────────────────────────
         // MODE 2: REKAP BULANAN (AKUMULASI PER JP DALAM 1 BULAN)
         // ───────────────────────────────────────────
-        const dates = [...new Set(mySessions.map(s=>s.tanggal))].sort();
+        // Generate seluruh tanggal hari efektif KBM (Senin, Selasa, Rabu, Kamis, Sabtu) dalam bulan terpilih (~21-23 hari)
+        // ditambah tanggal lain jika ada sesi di hari Jumat/Ahad
+        const activeDatesSet = new Set(mySessions.map(s => s.tanggal));
+        const daysInMonth = new Date(selYear, selMonth, 0).getDate();
+        for (let d = 1; d <= daysInMonth; d++) {
+          const iso = `${selYear}-${String(selMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          const dow = new Date(iso + 'T00:00:00').getDay(); // 0=Ahad, 5=Jumat (Libur rutin)
+          if (dow !== 0 && dow !== 5) {
+            activeDatesSet.add(iso);
+          }
+        }
+        const dates = [...activeDatesSet].sort();
+        const filledDatesCount = [...new Set(mySessions.map(s => s.tanggal))].length;
+        const HARI_SHORT = ['Ahd', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
         const jamById = new Map();
         jamList.forEach(j => jamById.set(String(j.id), j));
 
@@ -665,7 +678,7 @@ export const LaporanPage = {
                 <div>
                   <b style="color:var(--primary)">📅 Rekap Bulanan (Per JP):</b>
                   <span style="font-weight:600">${MONTHS[selMonth-1]} ${selYear}</span>
-                  <span style="color:var(--text-muted);margin-left:0.5rem">• ${dates.length} Hari Aktif • Total ${mySessions.length} Jam Pelajaran (JP)</span>
+                  <span style="color:var(--text-muted);margin-left:0.5rem">• ${dates.length} Hari Efektif (${filledDatesCount} Hari Terisi) • Total ${mySessions.length} Jam Pelajaran (JP)</span>
                 </div>
                 <div class="row" style="gap:0.6rem">
                   <span style="color:var(--text-muted)">Seluruh kehadiran dihitung per Jam Pelajaran (JP) dan dijumlahkan ke kolom Total H, I, S, A</span>
@@ -676,8 +689,6 @@ export const LaporanPage = {
             <!-- Matrix Table -->
             ${students.length === 0
               ? `<div class="empty-state"><p>Tidak ada siswa aktif di kelas ini.</p></div>`
-              : dates.length === 0
-              ? `<div class="empty-state"><p>Belum ada data absensi untuk ${MONTHS[selMonth-1]} ${selYear}.</p></div>`
               : `<div class="table-wrap" id="rekap-table-wrap" style="overflow-x:auto;max-width:100%">
                 <table id="rekap-table" style="min-width:max-content;border-collapse:collapse;font-size:0.75rem">
                   <thead>
@@ -685,7 +696,7 @@ export const LaporanPage = {
                       <th rowspan="2" style="min-width:32px;text-align:center;position:sticky;left:0;z-index:3;background:#f0faf4;border:1px solid var(--border)">#</th>
                       <th rowspan="2" style="min-width:160px;position:sticky;left:32px;z-index:3;background:#f0faf4;border:1px solid var(--border);text-align:left;padding-left:0.5rem">Nama Siswa</th>
                       <th colspan="${dates.length}" style="text-align:center;border:1px solid var(--border);padding:0.35rem;background:#f0faf4;color:var(--primary);font-weight:700">
-                        Tanggal & Jumlah JP (${MONTHS[selMonth-1]} ${selYear})
+                        Tanggal Hari Efektif & Jumlah JP (${MONTHS[selMonth-1]} ${selYear})
                       </th>
                       <th colspan="4" style="text-align:center;border:1px solid var(--border);border-left:2px solid var(--primary);padding:0.35rem 0.5rem;background:#f0faf4;color:var(--primary);font-weight:700">
                         Total (JP)
@@ -695,11 +706,14 @@ export const LaporanPage = {
                       ${dates.map(d=>{
                         const dt = new Date(d+'T00:00:00');
                         const day = dt.getDate();
+                        const hariShort = HARI_SHORT[dt.getDay()];
                         const jpCount = (sessionsByDate[d] || []).length;
+                        const isEmpty = jpCount === 0;
                         return `
-                          <th title="Tanggal ${d} (${jpCount} Jam Pelajaran)" style="min-width:34px;text-align:center;padding:3px 4px;border:1px solid var(--border)">
-                            <div style="font-weight:700;color:var(--text)">${day}</div>
-                            <div style="font-size:0.6rem;color:var(--text-muted);font-weight:500">${jpCount}JP</div>
+                          <th title="${hariShort}, ${d} (${jpCount} Jam Pelajaran)" style="min-width:34px;text-align:center;padding:3px 4px;border:1px solid var(--border);background:${isEmpty ? '#fff7ed' : '#f9fafb'}">
+                            <div style="font-size:0.56rem;color:var(--text-muted);font-weight:600">${hariShort}</div>
+                            <div style="font-weight:700;color:${isEmpty ? '#9a3412' : 'var(--text)'}">${day}</div>
+                            <div style="font-size:0.6rem;color:${isEmpty ? '#ea580c' : 'var(--text-muted)'};font-weight:500">${jpCount}JP</div>
                           </th>
                         `;
                       }).join('')}
