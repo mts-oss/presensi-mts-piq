@@ -286,7 +286,7 @@ export const LaporanPage = {
                   <label>Mode Tampilan</label>
                   <select id="sel-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
                     <option value="5hari" selected>📋 5 Hari (Semua JP)</option>
-                    <option value="bulanan">📅 1 Bulan (Ringkasan)</option>
+                    <option value="bulanan">📅 1 Bulan (Akumulasi JP)</option>
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;flex:1;min-width:110px">
@@ -557,25 +557,69 @@ export const LaporanPage = {
 
       } else {
         // ───────────────────────────────────────────
-        // MODE 2: REKAP BULANAN (RINGKASAN 1 BULAN)
+        // MODE 2: REKAP BULANAN (AKUMULASI PER JP DALAM 1 BULAN)
         // ───────────────────────────────────────────
         const dates = [...new Set(mySessions.map(s=>s.tanggal))].sort();
+        const jamById = new Map();
+        jamList.forEach(j => jamById.set(String(j.id), j));
+
+        // Group sessions per date (sorted by urutan JP)
+        const sessionsByDate = {};
+        const dateTotals = {};
+        dates.forEach(date => {
+          sessionsByDate[date] = mySessions
+            .filter(s => s.tanggal === date)
+            .sort((a, b) => {
+              const ja = jamById.get(String(a.lesson_hour_id));
+              const jb = jamById.get(String(b.lesson_hour_id));
+              return (ja?.urutan || 0) - (jb?.urutan || 0);
+            });
+          dateTotals[date] = { H: 0, I: 0, S: 0, A: 0 };
+        });
+
+        const grandTotalMonth = { H: 0, I: 0, S: 0, A: 0 };
+
         const matrixMonthly = students.map(stu => {
           const byDate = {};
+          let H = 0, I = 0, S = 0, A = 0;
+
           dates.forEach(date => {
-            const daySessions = mySessions.filter(s=>s.tanggal===date);
-            const recs = [];
+            const daySessions = sessionsByDate[date] || [];
+            let dH = 0, dI = 0, dS = 0, dA = 0;
+            const jpDetails = [];
+
             daySessions.forEach(sess => {
               const rec = attMap.get(`${sess.id}_${stu.id}`);
-              if (rec) recs.push(rec.status);
+              const j = jamById.get(String(sess.lesson_hour_id));
+              const jpLabel = j ? `JP ${j.urutan || j.nama}` : 'JP';
+              if (rec && rec.status) {
+                const st = rec.status;
+                jpDetails.push(`${jpLabel}: ${st}`);
+                if (st === 'H') { dH++; H++; dateTotals[date].H++; grandTotalMonth.H++; }
+                else if (st === 'I') { dI++; I++; dateTotals[date].I++; grandTotalMonth.I++; }
+                else if (st === 'S') { dS++; S++; dateTotals[date].S++; grandTotalMonth.S++; }
+                else if (st === 'A') { dA++; A++; dateTotals[date].A++; grandTotalMonth.A++; }
+              } else {
+                jpDetails.push(`${jpLabel}: -`);
+              }
             });
-            let status = recs.length > 0
-              ? (recs.includes('A') ? 'A' : recs.includes('S') ? 'S' : recs.includes('I') ? 'I' : 'H')
-              : '-';
-            byDate[date] = status;
+
+            // Build display badges/text per date showing JP counts
+            const parts = [];
+            const csvParts = [];
+            if (dH > 0) { parts.push(`<span class="sts-H">${dH}H</span>`); csvParts.push(`${dH}H`); }
+            if (dI > 0) { parts.push(`<span class="sts-I">${dI}I</span>`); csvParts.push(`${dI}I`); }
+            if (dS > 0) { parts.push(`<span class="sts-S">${dS}S</span>`); csvParts.push(`${dS}S`); }
+            if (dA > 0) { parts.push(`<span class="sts-A">${dA}A</span>`); csvParts.push(`${dA}A`); }
+
+            byDate[date] = {
+              html: parts.length > 0 ? parts.join(' ') : '<span style="color:#cbd5e1">–</span>',
+              csvText: csvParts.length > 0 ? csvParts.join(' ') : '-',
+              tooltip: jpDetails.join(', '),
+              dH, dI, dS, dA
+            };
           });
-          let H=0,I=0,S=0,A=0;
-          Object.values(byDate).forEach(v=>{if(v==='H')H++;else if(v==='I')I++;else if(v==='S')S++;else if(v==='A')A++;});
+
           return { stu, byDate, H, I, S, A };
         });
 
@@ -588,7 +632,7 @@ export const LaporanPage = {
                   <label>Mode Tampilan</label>
                   <select id="sel-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
                     <option value="5hari">📋 5 Hari (Semua JP)</option>
-                    <option value="bulanan" selected>📅 1 Bulan (Ringkasan)</option>
+                    <option value="bulanan" selected>📅 1 Bulan (Akumulasi JP)</option>
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;flex:1;min-width:120px">
@@ -615,43 +659,88 @@ export const LaporanPage = {
               </div>
             </div>
 
+            <!-- Summary Info Badge -->
+            <div class="card" style="padding:0.6rem 0.85rem;background:var(--primary-tint);border-color:#bbf7d0">
+              <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem;font-size:0.75rem">
+                <div>
+                  <b style="color:var(--primary)">📅 Rekap Bulanan (Per JP):</b>
+                  <span style="font-weight:600">${MONTHS[selMonth-1]} ${selYear}</span>
+                  <span style="color:var(--text-muted);margin-left:0.5rem">• ${dates.length} Hari Aktif • Total ${mySessions.length} Jam Pelajaran (JP)</span>
+                </div>
+                <div class="row" style="gap:0.6rem">
+                  <span style="color:var(--text-muted)">Seluruh kehadiran dihitung per Jam Pelajaran (JP) dan dijumlahkan ke kolom Total H, I, S, A</span>
+                </div>
+              </div>
+            </div>
+
             <!-- Matrix Table -->
             ${students.length === 0
               ? `<div class="empty-state"><p>Tidak ada siswa aktif di kelas ini.</p></div>`
               : dates.length === 0
               ? `<div class="empty-state"><p>Belum ada data absensi untuk ${MONTHS[selMonth-1]} ${selYear}.</p></div>`
-              : `<div class="table-wrap" id="rekap-table-wrap">
-                <table id="rekap-table">
+              : `<div class="table-wrap" id="rekap-table-wrap" style="overflow-x:auto;max-width:100%">
+                <table id="rekap-table" style="min-width:max-content;border-collapse:collapse;font-size:0.75rem">
                   <thead>
-                    <tr>
-                      <th style="min-width:28px">#</th>
-                      <th style="min-width:140px">Nama Siswa</th>
+                    <tr style="background:#f0faf4">
+                      <th rowspan="2" style="min-width:32px;text-align:center;position:sticky;left:0;z-index:3;background:#f0faf4;border:1px solid var(--border)">#</th>
+                      <th rowspan="2" style="min-width:160px;position:sticky;left:32px;z-index:3;background:#f0faf4;border:1px solid var(--border);text-align:left;padding-left:0.5rem">Nama Siswa</th>
+                      <th colspan="${dates.length}" style="text-align:center;border:1px solid var(--border);padding:0.35rem;background:#f0faf4;color:var(--primary);font-weight:700">
+                        Tanggal & Jumlah JP (${MONTHS[selMonth-1]} ${selYear})
+                      </th>
+                      <th colspan="4" style="text-align:center;border:1px solid var(--border);border-left:2px solid var(--primary);padding:0.35rem 0.5rem;background:#f0faf4;color:var(--primary);font-weight:700">
+                        Total (JP)
+                      </th>
+                    </tr>
+                    <tr style="background:#f9fafb">
                       ${dates.map(d=>{
-                        const day = new Date(d+'T00:00:00').getDate();
-                        return `<th style="min-width:28px;text-align:center">${day}</th>`;
+                        const dt = new Date(d+'T00:00:00');
+                        const day = dt.getDate();
+                        const jpCount = (sessionsByDate[d] || []).length;
+                        return `
+                          <th title="Tanggal ${d} (${jpCount} Jam Pelajaran)" style="min-width:34px;text-align:center;padding:3px 4px;border:1px solid var(--border)">
+                            <div style="font-weight:700;color:var(--text)">${day}</div>
+                            <div style="font-size:0.6rem;color:var(--text-muted);font-weight:500">${jpCount}JP</div>
+                          </th>
+                        `;
                       }).join('')}
-                      <th style="text-align:center;color:var(--hadir)">H</th>
-                      <th style="text-align:center;color:var(--izin)">I</th>
-                      <th style="text-align:center;color:var(--sakit)">S</th>
-                      <th style="text-align:center;color:var(--alpa)">A</th>
+                      <th style="min-width:32px;text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary)">H</th>
+                      <th style="min-width:32px;text-align:center;color:var(--izin);border:1px solid var(--border)">I</th>
+                      <th style="min-width:32px;text-align:center;color:var(--sakit);border:1px solid var(--border)">S</th>
+                      <th style="min-width:32px;text-align:center;color:var(--alpa);border:1px solid var(--border)">A</th>
                     </tr>
                   </thead>
                   <tbody>
                     ${matrixMonthly.map((row,idx)=>`
-                      <tr class="student-row">
-                        <td>${idx+1}</td>
-                        <td style="white-space:nowrap;font-weight:600">${this._escHtml(row.stu.nama_siswa)}</td>
+                      <tr class="student-row" style="background:${idx % 2 === 0 ? '#ffffff' : '#fcfdfc'}">
+                        <td style="text-align:center;position:sticky;left:0;z-index:1;background:inherit;border:1px solid var(--border)">${idx+1}</td>
+                        <td style="white-space:nowrap;font-weight:600;position:sticky;left:32px;z-index:1;background:inherit;border:1px solid var(--border);padding:0.35rem 0.5rem">${this._escHtml(row.stu.nama_siswa)}</td>
                         ${dates.map(d=>{
-                          const v=row.byDate[d];
-                          return `<td style="text-align:center" class="sts-${v==='H'?'H':v==='I'?'I':v==='S'?'S':v==='A'?'A':''}">${v||'–'}</td>`;
+                          const cell = row.byDate[d];
+                          return `<td title="${this._escHtml(cell?.tooltip || '')}" style="text-align:center;white-space:nowrap;padding:0.3rem 0.35rem;border:1px solid var(--border);font-size:0.74rem;cursor:help">${cell ? cell.html : '–'}</td>`;
                         }).join('')}
-                        <td style="text-align:center;font-weight:700;color:var(--hadir)">${row.H}</td>
-                        <td style="text-align:center;font-weight:700;color:var(--izin)">${row.I}</td>
-                        <td style="text-align:center;font-weight:700;color:var(--sakit)">${row.S}</td>
-                        <td style="text-align:center;font-weight:700;color:var(--alpa)">${row.A}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary);background:#f0faf4">${row.H}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--izin);border:1px solid var(--border);background:#fffbeb">${row.I}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--sakit);border:1px solid var(--border);background:#eff6ff">${row.S}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--alpa);border:1px solid var(--border);background:#fef2f2">${row.A}</td>
                       </tr>
                     `).join('')}
                   </tbody>
+                  <tfoot>
+                    <tr style="background:#f1f5f3;font-weight:700">
+                      <td colspan="2" style="text-align:right;padding-right:0.75rem;position:sticky;left:0;z-index:1;background:#f1f5f3;border:1px solid var(--border);font-size:0.75rem">
+                        Total Hadir (JP):
+                      </td>
+                      ${dates.map(d => `
+                        <td style="text-align:center;font-size:0.72rem;color:var(--hadir);border:1px solid var(--border)">
+                          ${dateTotals[d]?.H || 0}
+                        </td>
+                      `).join('')}
+                      <td style="text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary)">${grandTotalMonth.H}</td>
+                      <td style="text-align:center;color:var(--izin);border:1px solid var(--border)">${grandTotalMonth.I}</td>
+                      <td style="text-align:center;color:var(--sakit);border:1px solid var(--border)">${grandTotalMonth.S}</td>
+                      <td style="text-align:center;color:var(--alpa);border:1px solid var(--border)">${grandTotalMonth.A}</td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>`
             }
@@ -665,18 +754,18 @@ export const LaporanPage = {
         content.querySelector('#sel-year')?.addEventListener('change', e => { selYear = parseInt(e.target.value); render(); });
         content.querySelector('#btn-refresh-rekap')?.addEventListener('click', () => { render(true); });
 
-        // Export CSV (Monthly)
+        // Export CSV (Monthly per JP)
         content.querySelector('#btn-exp-csv')?.addEventListener('click', () => {
           const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
-          let csv = `Rekap Kehadiran ${className} - ${MONTHS[selMonth-1]} ${selYear}\n`;
-          csv += `No,Nama Siswa,${dates.map(d=>new Date(d+'T00:00:00').getDate()).join(',')},H,I,S,A\n`;
+          let csv = `Rekap Kehadiran Siswa (Per JP) ${className} - ${MONTHS[selMonth-1]} ${selYear}\n`;
+          csv += `No,Nama Siswa,${dates.map(d=>`"Tgl ${new Date(d+'T00:00:00').getDate()} (${(sessionsByDate[d]||[]).length}JP)"`).join(',')},Total H (JP),Total I (JP),Total S (JP),Total A (JP)\n`;
           matrixMonthly.forEach((row,idx) => {
-            csv += `${idx+1},${row.stu.nama_siswa},${dates.map(d=>row.byDate[d]||'-').join(',')},${row.H},${row.I},${row.S},${row.A}\n`;
+            csv += `${idx+1},"${row.stu.nama_siswa}",${dates.map(d=>`"${row.byDate[d]?.csvText||'-'}"`).join(',')},${row.H},${row.I},${row.S},${row.A}\n`;
           });
-          const blob = new Blob([csv], {type:'text/csv'});
+          const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
           const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = `rekap_${className}_${selYear}_${selMonth}.csv`;
+          a.download = `rekap_bulanan_jp_${className}_${selYear}_${selMonth}.csv`;
           a.click();
         });
 
@@ -688,19 +777,30 @@ export const LaporanPage = {
           const win = window.open('', '_blank');
           win.document.write(`
             <!DOCTYPE html><html lang="id"><head>
-            <meta charset="UTF-8"><title>Rekap Kehadiran ${className}</title>
+            <meta charset="UTF-8"><title>Rekap Kehadiran Bulanan ${className}</title>
             <style>
-              body{font-family:Arial,sans-serif;font-size:11px;color:#000;padding:1.5cm}
-              h2,h3{text-align:center;margin-bottom:4px}
-              table{width:100%;border-collapse:collapse;margin-top:12px}
-              th,td{border:1px solid #ccc;padding:3px 5px;font-size:10px}
-              th{background:#e8f5ed;text-align:center}
+              @page { size: landscape; margin: 0.8cm; }
+              body{font-family:Arial,sans-serif;font-size:10px;color:#000;padding:0.5cm}
+              h2,h3{text-align:center;margin:2px 0}
+              table{width:100%;border-collapse:collapse;margin-top:10px}
+              th,td{border:1px solid #888;padding:3px 4px;font-size:9px;text-align:center}
+              th{background:#e8f5ed}
+              .sts-H { font-weight: bold; color: #15803d; }
+              .sts-I { font-weight: bold; color: #b45309; }
+              .sts-S { font-weight: bold; color: #1d4ed8; }
+              .sts-A { font-weight: bold; color: #b91c1c; }
             </style></head><body>
-            <h2>MTs PIQ Singosari</h2>
-            <h3>Rekap Kehadiran Siswa — ${className} — ${MONTHS[selMonth-1]} ${selYear}</h3>
+            <h2>MTs PIQ Singosari Malang</h2>
+            <h3>Rekap Kehadiran Siswa Bulanan (Akumulasi Per JP) — Kelas ${className} — ${MONTHS[selMonth-1]} ${selYear}</h3>
             ${tableEl.outerHTML}
-            <p style="margin-top:20px;text-align:right">Singosari, ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</p>
-            <p style="text-align:right;margin-top:40px"><br>Wali Kelas<br><br><br>_______________</p>
+            <div style="margin-top:20px;display:flex;justify-content:space-between">
+              <div>
+                <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
+              </div>
+              <div style="text-align:right">
+                <p>Singosari, ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}<br>Wali Kelas ${className}<br><br><br><br><b>_____________________</b></p>
+              </div>
+            </div>
             </body></html>`);
           win.document.close();
           win.print();
