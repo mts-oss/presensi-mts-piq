@@ -53,6 +53,7 @@ export const LaporanPage = {
   _renderRekapHarian(content) {
     const now = new Date();
     let selClass = store.getClasses()[0]?.id || null;
+    let selTeacher = 'all'; // 'all' | teacher.id
     let selYear  = now.getFullYear();
     let selMonth = now.getMonth() + 1; // 1-indexed
     let mode     = '5hari'; // '5hari' (default) | 'bulanan'
@@ -174,15 +175,54 @@ export const LaporanPage = {
       const classes  = store.getClasses();
       if (!selClass && classes.length > 0) selClass = classes[0].id;
       const students = store.getStudentsByClass(selClass);
-      const sessions = store.getSessions();
-      const jamList  = (store.getJam() || []).slice().sort((a,b) => (a.urutan||0) - (b.urutan||0));
-      const subjects = store.getSubjects() || [];
-      const teachers = store.getTeachers() || [];
+      const sessions  = store.getSessions();
+      const schedules = store.getSchedules();
+      const jamList   = (store.getJam() || []).slice().sort((a,b) => (a.urutan||0) - (b.urutan||0));
+      const subjects  = store.getSubjects() || [];
+      const teachers  = store.getTeachers() || [];
+      const allUsers  = store.getUsers() || [];
 
       const subjectMap = new Map();
       subjects.forEach(s => subjectMap.set(String(s.id), s));
       const teacherMap = new Map();
+      allUsers.forEach(u => teacherMap.set(String(u.id), u));
       teachers.forEach(t => teacherMap.set(String(t.id), t));
+      const schedById = new Map(schedules.map(s => [String(s.id), s]));
+
+      // Build list of teachers who teach in the selected class (from schedules & recorded sessions)
+      const classScheds = schedules.filter(s => String(s.class_id) === String(selClass));
+      const classTeacherIds = new Set();
+      const teacherSubjectsInClass = new Map();
+      const addTeacherSubject = (tid, sid) => {
+        if (!tid) return;
+        const key = String(tid);
+        classTeacherIds.add(key);
+        if (!teacherSubjectsInClass.has(key)) teacherSubjectsInClass.set(key, new Set());
+        const subjName = subjectMap.get(String(sid))?.pelajaran;
+        if (subjName) teacherSubjectsInClass.get(key).add(subjName);
+      };
+      classScheds.forEach(s => addTeacherSubject(s.teacher_id, s.subject_id));
+      sessions.filter(s => String(s.class_id) === String(selClass)).forEach(s => {
+        const sc = schedById.get(String(s.schedule_id));
+        addTeacherSubject(sc?.teacher_id || s.teacher_id, s.subject_id);
+      });
+
+      const classTeachers = [...classTeacherIds]
+        .map(id => {
+          const u = teacherMap.get(id);
+          if (!u) return null;
+          const mapelList = [...(teacherSubjectsInClass.get(id) || [])];
+          return { ...u, mapelInClass: mapelList.join(', ') };
+        })
+        .filter(Boolean)
+        .sort((a, b) => (a.nama || '').localeCompare(b.nama || ''));
+
+      if (selTeacher !== 'all' && !classTeachers.some(t => String(t.id) === String(selTeacher))) {
+        selTeacher = 'all';
+      }
+      const activeTeacher = selTeacher !== 'all'
+        ? classTeachers.find(t => String(t.id) === String(selTeacher))
+        : null;
 
       const weeks = getMonthWeeks(selYear, selMonth);
 
@@ -192,11 +232,18 @@ export const LaporanPage = {
       const curStartIso = days5[0]?.iso || selStartDate;
       const curEndIso   = days5[days5.length - 1]?.iso || selStartDate;
 
-      // Filter sessions based on mode
+      // Filter sessions based on mode, class, and optional teacher
       const prefix = `${selYear}-${String(selMonth).padStart(2,'0')}`;
-      const mySessions = mode === '5hari'
+      const matchTeacher = (s) => {
+        if (selTeacher === 'all') return true;
+        if (String(s.teacher_id) === String(selTeacher)) return true;
+        const sc = schedById.get(String(s.schedule_id));
+        return sc && String(sc.teacher_id) === String(selTeacher);
+      };
+      const mySessions = (mode === '5hari'
         ? sessions.filter(s => String(s.class_id) === String(selClass) && activeDates.includes(s.tanggal))
-        : sessions.filter(s => String(s.class_id) === String(selClass) && s.tanggal.startsWith(prefix));
+        : sessions.filter(s => String(s.class_id) === String(selClass) && s.tanggal.startsWith(prefix))
+      ).filter(matchTeacher);
 
       const sessionIds = mySessions.map(s => s.id);
 
@@ -289,10 +336,17 @@ export const LaporanPage = {
                     <option value="bulanan">📅 1 Bulan (Akumulasi JP)</option>
                   </select>
                 </div>
-                <div class="form-group" style="margin:0;flex:1;min-width:110px">
+                <div class="form-group" style="margin:0;min-width:95px">
                   <label>Kelas</label>
                   <select id="sel-class" class="form-control" style="font-size:0.82rem">
                     ${classes.map(c=>`<option value="${c.id}" ${String(c.id)===String(selClass)?'selected':''}>${c.nama_kelas}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;flex:1;min-width:170px">
+                  <label>Guru Pengajar</label>
+                  <select id="sel-teacher" class="form-control" style="font-size:0.82rem">
+                    <option value="all" ${selTeacher==='all'?'selected':''}>Semua Guru (${classTeachers.length})</option>
+                    ${classTeachers.map(t => `<option value="${t.id}" ${String(t.id)===String(selTeacher)?'selected':''}>${this._escHtml(t.nama)}${t.mapelInClass ? ` — ${this._escHtml(t.mapelInClass)}` : ''}</option>`).join('')}
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;min-width:90px">
@@ -316,10 +370,11 @@ export const LaporanPage = {
                   <button class="btn btn-outline btn-sm" id="btn-prev-5" title="5 Hari Belajar Sebelumnya">◀</button>
                   <button class="btn btn-outline btn-sm" id="btn-next-5" title="5 Hari Belajar Selanjutnya">▶</button>
                 </div>
-                <div style="display:flex;gap:0.4rem;margin-left:auto">
+                <div style="display:flex;gap:0.4rem;margin-left:auto;flex-wrap:wrap">
                   <button class="btn btn-outline btn-sm" id="btn-refresh-rekap" title="Muat ulang data absensi dari server">🔄 Sync</button>
-                  <button class="btn btn-secondary btn-sm" id="btn-exp-csv">⬇ CSV</button>
-                  <button class="btn btn-primary btn-sm" id="btn-exp-print">🖨 Cetak</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-exp-excel" title="Unduh format Excel (.xlsx)">📊 Excel</button>
+                  <button class="btn btn-outline btn-sm" id="btn-exp-csv" title="Unduh format CSV">⬇ CSV</button>
+                  <button class="btn btn-primary btn-sm" id="btn-exp-print" title="Cetak atau simpan sebagai PDF">📄 PDF / Cetak</button>
                 </div>
               </div>
 
@@ -338,6 +393,7 @@ export const LaporanPage = {
                 <div>
                   <b style="color:var(--primary)">📅 Rentang 5 Hari:</b>
                   <span style="font-weight:600">${days5[0].label} — ${days5[days5.length-1].label}</span>
+                  ${activeTeacher ? `<span style="color:var(--primary);font-weight:600;margin-left:0.4rem">• Guru: ${this._escHtml(activeTeacher.nama)}${activeTeacher.mapelInClass ? ` (${this._escHtml(activeTeacher.mapelInClass)})` : ''}</span>` : ''}
                   <span style="color:var(--text-muted);margin-left:0.5rem">• ${mySessions.length} Jam Pelajaran Terisi</span>
                 </div>
                 <div class="row" style="gap:0.6rem">
@@ -451,7 +507,8 @@ export const LaporanPage = {
 
         // Event Listeners for 5-Day Mode
         content.querySelector('#sel-mode')?.addEventListener('change', e => { mode = e.target.value; render(); });
-        content.querySelector('#sel-class')?.addEventListener('change', e => { selClass = parseInt(e.target.value); render(); });
+        content.querySelector('#sel-class')?.addEventListener('change', e => { selClass = parseInt(e.target.value); selTeacher = 'all'; render(); });
+        content.querySelector('#sel-teacher')?.addEventListener('change', e => { selTeacher = e.target.value; render(); });
         content.querySelector('#sel-month')?.addEventListener('change', e => {
           selMonth = parseInt(e.target.value);
           selStartDate = initDefaultStartDate(selYear, selMonth);
@@ -493,10 +550,38 @@ export const LaporanPage = {
         });
         content.querySelector('#btn-refresh-rekap')?.addEventListener('click', () => { render(true); });
 
+        // Export Excel (5-Day Detail)
+        content.querySelector('#btn-exp-excel')?.addEventListener('click', () => {
+          const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
+          const teacherLabel = activeTeacher ? `${activeTeacher.nama}${activeTeacher.mapelInClass ? ' (' + activeTeacher.mapelInClass + ')' : ''}` : 'Semua Guru';
+          const jpHeaders = days5.map(d => jamList.map(j => `${d.dayName} ${d.formattedDate} JP${j.urutan}`)).flat();
+          const rows = [
+            [`REKAPITULASI PRESENSI SISWA PER JAM PELAJARAN — MTs PIQ SINGOSARI MALANG`],
+            [`Kelas: ${className} | Guru Pengajar: ${teacherLabel}`],
+            [`Periode 5 Hari: ${days5[0].label} s/d ${days5[days5.length-1].label}`],
+            [],
+            ['No', 'Nama Siswa', ...jpHeaders, 'Total H', 'Total I', 'Total S', 'Total A'],
+            ...matrix5.map((row, idx) => [
+              idx + 1,
+              row.stu.nama_siswa,
+              ...days5.map(d => jamList.map(j => {
+                const cell = row.byDayJam[`${d.iso}_${j.id}`];
+                return (cell && cell.hasSession) ? cell.status : '-';
+              })).flat(),
+              row.H, row.I, row.S, row.A
+            ])
+          ];
+          const safeTeacher = activeTeacher ? `_${activeTeacher.kode || 'Guru'}` : '';
+          this._downloadExcelWorkbook([
+            { name: `Kelas ${className}`, rows, colWidths: [5, 28, ...jpHeaders.map(() => 10), 9, 9, 9, 9] }
+          ], `Rekap_5Hari_${className}${safeTeacher}_${days5[0].iso}.xlsx`);
+        });
+
         // Export CSV (5-Day Detail)
         content.querySelector('#btn-exp-csv')?.addEventListener('click', () => {
           const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
-          let csv = `Rekap Kehadiran Siswa ${className} - Detail Per Jam Pelajaran (5 Hari: ${days5[0].iso} s/d ${days5[days5.length-1].iso})\n`;
+          const teacherNote = activeTeacher ? ` | Guru: ${activeTeacher.nama}` : '';
+          let csv = `Rekap Kehadiran Siswa ${className}${teacherNote} - Detail Per Jam Pelajaran (5 Hari: ${days5[0].iso} s/d ${days5[days5.length-1].iso})\n`;
           const jpHeaders = days5.map(d => jamList.map(j => `"${d.dayName} ${d.formattedDate} JP${j.urutan}"`)).flat().join(',');
           csv += `No,Nama Siswa,${jpHeaders},Total H,Total I,Total S,Total A\n`;
 
@@ -515,44 +600,21 @@ export const LaporanPage = {
           a.click();
         });
 
-        // Print Landscape
+        // Print / PDF Landscape
         content.querySelector('#btn-exp-print')?.addEventListener('click', () => {
           const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
           const tableEl = document.getElementById('rekap-table');
           if (!tableEl) { alert('Tidak ada data untuk dicetak.'); return; }
-          const win = window.open('', '_blank');
-          win.document.write(`
-            <!DOCTYPE html><html lang="id"><head>
-            <meta charset="UTF-8"><title>Rekap Kehadiran 5 Hari ${className}</title>
-            <style>
-              @page { size: landscape; margin: 0.6cm; }
-              body { font-family: Arial, sans-serif; font-size: 8px; color: #000; padding: 0.5cm; }
-              h2, h3 { text-align: center; margin: 2px 0; }
-              table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-              th, td { border: 1px solid #777; padding: 2px 3px; font-size: 7.5px; text-align: center; }
-              th { background: #e8f5ed; }
-              .sts-H { font-weight: bold; color: #15803d; }
-              .sts-I { font-weight: bold; color: #b45309; }
-              .sts-S { font-weight: bold; color: #1d4ed8; }
-              .sts-A { font-weight: bold; color: #b91c1c; }
-            </style></head><body>
-            <h2>MTs PIQ Singosari Malang</h2>
-            <h3>Rekapitulasi Presensi Siswa Per Jam Pelajaran — Kelas ${className}</h3>
-            <p style="text-align:center;font-size:8.5px;margin:2px 0 8px 0">
-              Periode 5 Hari: <b>${days5[0].label}</b> s/d <b>${days5[days5.length-1].label}</b>
-            </p>
-            ${tableEl.outerHTML}
-            <div style="margin-top:20px;display:flex;justify-content:space-between">
-              <div>
-                <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
-              </div>
-              <div style="text-align:right">
-                <p>Singosari, ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}<br>Wali Kelas ${className}<br><br><br><br><b>_____________________</b></p>
-              </div>
-            </div>
-            </body></html>`);
-          win.document.close();
-          win.print();
+          const teacherSub = activeTeacher
+            ? `Guru Pengajar: ${activeTeacher.nama}${activeTeacher.mapelInClass ? ` (${activeTeacher.mapelInClass})` : ''} • `
+            : '';
+          this._openPrintPdf({
+            title: `Rekapitulasi Presensi Siswa Per Jam Pelajaran — Kelas ${className}`,
+            subtitle: `${teacherSub}Periode 5 Hari: ${days5[0].label} s/d ${days5[days5.length-1].label}`,
+            tableHtml: tableEl.outerHTML,
+            rightSignerLabel: activeTeacher ? `Guru Mapel (${activeTeacher.nama})` : `Wali Kelas ${className}`,
+            compact: true
+          });
         });
 
       } else {
@@ -648,10 +710,17 @@ export const LaporanPage = {
                     <option value="bulanan" selected>📅 1 Bulan (Akumulasi JP)</option>
                   </select>
                 </div>
-                <div class="form-group" style="margin:0;flex:1;min-width:120px">
+                <div class="form-group" style="margin:0;min-width:95px">
                   <label>Kelas</label>
                   <select id="sel-class" class="form-control" style="font-size:0.82rem">
                     ${classes.map(c=>`<option value="${c.id}" ${String(c.id)===String(selClass)?'selected':''}>${c.nama_kelas}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;flex:1;min-width:170px">
+                  <label>Guru Pengajar</label>
+                  <select id="sel-teacher" class="form-control" style="font-size:0.82rem">
+                    <option value="all" ${selTeacher==='all'?'selected':''}>Semua Guru (${classTeachers.length})</option>
+                    ${classTeachers.map(t => `<option value="${t.id}" ${String(t.id)===String(selTeacher)?'selected':''}>${this._escHtml(t.nama)}${t.mapelInClass ? ` — ${this._escHtml(t.mapelInClass)}` : ''}</option>`).join('')}
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;min-width:90px">
@@ -664,10 +733,11 @@ export const LaporanPage = {
                   <label>Tahun</label>
                   <input type="number" id="sel-year" class="form-control" value="${selYear}" style="font-size:0.82rem">
                 </div>
-                <div style="display:flex;gap:0.4rem;margin-left:auto">
+                <div style="display:flex;gap:0.4rem;margin-left:auto;flex-wrap:wrap">
                   <button class="btn btn-outline btn-sm" id="btn-refresh-rekap" title="Muat ulang data absensi dari server">🔄 Sync</button>
-                  <button class="btn btn-secondary btn-sm" id="btn-exp-csv">⬇ CSV</button>
-                  <button class="btn btn-primary btn-sm" id="btn-exp-print">🖨 Cetak</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-exp-excel" title="Unduh format Excel (.xlsx)">📊 Excel</button>
+                  <button class="btn btn-outline btn-sm" id="btn-exp-csv" title="Unduh format CSV">⬇ CSV</button>
+                  <button class="btn btn-primary btn-sm" id="btn-exp-print" title="Cetak atau simpan sebagai PDF">📄 PDF / Cetak</button>
                 </div>
               </div>
             </div>
@@ -678,6 +748,7 @@ export const LaporanPage = {
                 <div>
                   <b style="color:var(--primary)">📅 Rekap Bulanan (Per JP):</b>
                   <span style="font-weight:600">${MONTHS[selMonth-1]} ${selYear}</span>
+                  ${activeTeacher ? `<span style="color:var(--primary);font-weight:600;margin-left:0.4rem">• Guru: ${this._escHtml(activeTeacher.nama)}${activeTeacher.mapelInClass ? ` (${this._escHtml(activeTeacher.mapelInClass)})` : ''}</span>` : ''}
                   <span style="color:var(--text-muted);margin-left:0.5rem">• ${dates.length} Hari Efektif (${filledDatesCount} Hari Terisi) • Total ${mySessions.length} Jam Pelajaran (JP)</span>
                 </div>
                 <div class="row" style="gap:0.6rem">
@@ -763,15 +834,41 @@ export const LaporanPage = {
 
         // Event Listeners for Monthly Mode
         content.querySelector('#sel-mode')?.addEventListener('change', e => { mode = e.target.value; render(); });
-        content.querySelector('#sel-class')?.addEventListener('change', e => { selClass = parseInt(e.target.value); render(); });
+        content.querySelector('#sel-class')?.addEventListener('change', e => { selClass = parseInt(e.target.value); selTeacher = 'all'; render(); });
+        content.querySelector('#sel-teacher')?.addEventListener('change', e => { selTeacher = e.target.value; render(); });
         content.querySelector('#sel-month')?.addEventListener('change', e => { selMonth = parseInt(e.target.value); render(); });
         content.querySelector('#sel-year')?.addEventListener('change', e => { selYear = parseInt(e.target.value); render(); });
         content.querySelector('#btn-refresh-rekap')?.addEventListener('click', () => { render(true); });
 
+        // Export Excel (Monthly per JP)
+        content.querySelector('#btn-exp-excel')?.addEventListener('click', () => {
+          const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
+          const teacherLabel = activeTeacher ? `${activeTeacher.nama}${activeTeacher.mapelInClass ? ' (' + activeTeacher.mapelInClass + ')' : ''}` : 'Semua Guru';
+          const dateHeaders = dates.map(d => `Tgl ${new Date(d+'T00:00:00').getDate()} (${(sessionsByDate[d]||[]).length}JP)`);
+          const rows = [
+            [`REKAPITULASI KEHADIRAN SISWA BULANAN (PER JP) — MTs PIQ SINGOSARI MALANG`],
+            [`Kelas: ${className} | Guru Pengajar: ${teacherLabel}`],
+            [`Periode: ${MONTHS[selMonth-1]} ${selYear}`],
+            [],
+            ['No', 'Nama Siswa', ...dateHeaders, 'Total H (JP)', 'Total I (JP)', 'Total S (JP)', 'Total A (JP)'],
+            ...matrixMonthly.map((row, idx) => [
+              idx + 1,
+              row.stu.nama_siswa,
+              ...dates.map(d => row.byDate[d]?.csvText || '-'),
+              row.H, row.I, row.S, row.A
+            ])
+          ];
+          const safeTeacher = activeTeacher ? `_${activeTeacher.kode || 'Guru'}` : '';
+          this._downloadExcelWorkbook([
+            { name: `Bulanan ${className}`, rows, colWidths: [5, 28, ...dateHeaders.map(() => 12), 11, 11, 11, 11] }
+          ], `Rekap_Bulanan_${className}${safeTeacher}_${MONTHS[selMonth-1]}_${selYear}.xlsx`);
+        });
+
         // Export CSV (Monthly per JP)
         content.querySelector('#btn-exp-csv')?.addEventListener('click', () => {
           const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
-          let csv = `Rekap Kehadiran Siswa (Per JP) ${className} - ${MONTHS[selMonth-1]} ${selYear}\n`;
+          const teacherNote = activeTeacher ? ` | Guru: ${activeTeacher.nama}` : '';
+          let csv = `Rekap Kehadiran Siswa (Per JP) ${className}${teacherNote} - ${MONTHS[selMonth-1]} ${selYear}\n`;
           csv += `No,Nama Siswa,${dates.map(d=>`"Tgl ${new Date(d+'T00:00:00').getDate()} (${(sessionsByDate[d]||[]).length}JP)"`).join(',')},Total H (JP),Total I (JP),Total S (JP),Total A (JP)\n`;
           matrixMonthly.forEach((row,idx) => {
             csv += `${idx+1},"${row.stu.nama_siswa}",${dates.map(d=>`"${row.byDate[d]?.csvText||'-'}"`).join(',')},${row.H},${row.I},${row.S},${row.A}\n`;
@@ -783,41 +880,21 @@ export const LaporanPage = {
           a.click();
         });
 
-        // Print (Monthly)
+        // Print / PDF (Monthly)
         content.querySelector('#btn-exp-print')?.addEventListener('click', () => {
           const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
           const tableEl = document.getElementById('rekap-table');
           if (!tableEl) { alert('Tidak ada data untuk dicetak.'); return; }
-          const win = window.open('', '_blank');
-          win.document.write(`
-            <!DOCTYPE html><html lang="id"><head>
-            <meta charset="UTF-8"><title>Rekap Kehadiran Bulanan ${className}</title>
-            <style>
-              @page { size: landscape; margin: 0.8cm; }
-              body{font-family:Arial,sans-serif;font-size:10px;color:#000;padding:0.5cm}
-              h2,h3{text-align:center;margin:2px 0}
-              table{width:100%;border-collapse:collapse;margin-top:10px}
-              th,td{border:1px solid #888;padding:3px 4px;font-size:9px;text-align:center}
-              th{background:#e8f5ed}
-              .sts-H { font-weight: bold; color: #15803d; }
-              .sts-I { font-weight: bold; color: #b45309; }
-              .sts-S { font-weight: bold; color: #1d4ed8; }
-              .sts-A { font-weight: bold; color: #b91c1c; }
-            </style></head><body>
-            <h2>MTs PIQ Singosari Malang</h2>
-            <h3>Rekap Kehadiran Siswa Bulanan (Akumulasi Per JP) — Kelas ${className} — ${MONTHS[selMonth-1]} ${selYear}</h3>
-            ${tableEl.outerHTML}
-            <div style="margin-top:20px;display:flex;justify-content:space-between">
-              <div>
-                <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
-              </div>
-              <div style="text-align:right">
-                <p>Singosari, ${new Date().toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}<br>Wali Kelas ${className}<br><br><br><br><b>_____________________</b></p>
-              </div>
-            </div>
-            </body></html>`);
-          win.document.close();
-          win.print();
+          const teacherSub = activeTeacher
+            ? `Guru Pengajar: ${activeTeacher.nama}${activeTeacher.mapelInClass ? ` (${activeTeacher.mapelInClass})` : ''} • `
+            : '';
+          this._openPrintPdf({
+            title: `Rekap Kehadiran Siswa Bulanan (Akumulasi Per JP) — Kelas ${className}`,
+            subtitle: `${teacherSub}Periode: ${MONTHS[selMonth-1]} ${selYear}`,
+            tableHtml: tableEl.outerHTML,
+            rightSignerLabel: activeTeacher ? `Guru Mapel (${activeTeacher.nama})` : `Wali Kelas ${className}`,
+            compact: true
+          });
         });
       }
     };
@@ -839,70 +916,8 @@ export const LaporanPage = {
     let renderToken = 0;
 
     const HARI_LABEL = ['Ahad','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
-
-    const downloadExcelWorkbook = (sheets, filename) => {
-      if (typeof XLSX !== 'undefined') {
-        const wb = XLSX.utils.book_new();
-        sheets.forEach(({ name, rows, colWidths }) => {
-          const ws = XLSX.utils.aoa_to_sheet(rows);
-          if (colWidths) {
-            ws['!cols'] = colWidths.map(w => ({ wch: w }));
-          }
-          XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
-        });
-        XLSX.writeFile(wb, filename);
-        if (window._toast) window._toast(`✓ File Excel berhasil diunduh: ${filename}`, 'success');
-      } else {
-        // Fallback CSV if SheetJS CDN unavailable
-        const firstRows = sheets[0]?.rows || [];
-        const csv = firstRows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename.replace(/\.xlsx$/i, '.csv');
-        a.click();
-        if (window._toast) window._toast('⚠ Library Excel offline — diunduh sebagai CSV', 'warning');
-      }
-    };
-
-    const openPrintPdf = ({ title, subtitle, tableHtml, rightSignerLabel }) => {
-      const win = window.open('', '_blank');
-      if (!win) {
-        alert('Popup diblokir browser. Izinkan popup untuk mencetak / simpan PDF.');
-        return;
-      }
-      win.document.write(`
-        <!DOCTYPE html><html lang="id"><head>
-        <meta charset="UTF-8"><title>${this._escHtml(title)}</title>
-        <style>
-          @page { size: landscape; margin: 0.9cm; }
-          body { font-family: Arial, sans-serif; font-size: 10px; color: #111; padding: 0.4cm; }
-          h2, h3 { text-align: center; margin: 2px 0; }
-          p.sub { text-align: center; font-size: 9.5px; color: #444; margin: 4px 0 10px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-          th, td { border: 1px solid #777; padding: 4px 6px; font-size: 9px; vertical-align: middle; }
-          th { background: #e8f5ed; color: #14532d; font-weight: bold; }
-          tfoot td { background: #f1f5f3; font-weight: bold; }
-          .sign-wrap { margin-top: 22px; display: flex; justify-content: space-between; font-size: 9.5px; }
-        </style></head><body>
-        <h2>MTs PIQ Singosari Malang</h2>
-        <h3>${this._escHtml(title)}</h3>
-        ${subtitle ? `<p class="sub">${this._escHtml(subtitle)}</p>` : ''}
-        ${tableHtml}
-        <div class="sign-wrap">
-          <div>
-            <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
-          </div>
-          <div style="text-align:right">
-            <p>Singosari, ${new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric' })}<br>${this._escHtml(rightSignerLabel || 'Waka Kurikulum / Operator')}<br><br><br><br><b>_____________________</b></p>
-          </div>
-        </div>
-        </body></html>
-      `);
-      win.document.close();
-      win.focus();
-      setTimeout(() => win.print(), 250);
-    };
+    const downloadExcelWorkbook = (sheets, filename) => this._downloadExcelWorkbook(sheets, filename);
+    const openPrintPdf = (opts) => this._openPrintPdf(opts);
 
     const render = async (forceRefresh = false) => {
       const token = ++renderToken;
@@ -1538,6 +1553,76 @@ export const LaporanPage = {
   },
 
 
+
+  _downloadExcelWorkbook(sheets, filename) {
+    if (typeof XLSX !== 'undefined') {
+      const wb = XLSX.utils.book_new();
+      sheets.forEach(({ name, rows, colWidths }) => {
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        if (colWidths) {
+          ws['!cols'] = colWidths.map(w => ({ wch: w }));
+        }
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+      });
+      XLSX.writeFile(wb, filename);
+      if (window._toast) window._toast(`✓ File Excel berhasil diunduh: ${filename}`, 'success');
+    } else {
+      const firstRows = sheets[0]?.rows || [];
+      const csv = firstRows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename.replace(/\.xlsx$/i, '.csv');
+      a.click();
+      if (window._toast) window._toast('⚠ Library Excel offline — diunduh sebagai CSV', 'warning');
+    }
+  },
+
+  _openPrintPdf({ title, subtitle, tableHtml, rightSignerLabel, compact = false }) {
+    const win = window.open('', '_blank');
+    if (!win) {
+      alert('Popup diblokir browser. Izinkan popup untuk mencetak / simpan PDF.');
+      return;
+    }
+    const fontSz = compact ? '8px' : '10px';
+    const cellSz = compact ? '7.5px' : '9px';
+    const cellPad = compact ? '2px 3px' : '4px 6px';
+    win.document.write(`
+      <!DOCTYPE html><html lang="id"><head>
+      <meta charset="UTF-8"><title>${this._escHtml(title)}</title>
+      <style>
+        @page { size: landscape; margin: 0.7cm; }
+        body { font-family: Arial, sans-serif; font-size: ${fontSz}; color: #111; padding: 0.4cm; }
+        h2, h3 { text-align: center; margin: 2px 0; }
+        p.sub { text-align: center; font-size: 9px; color: #444; margin: 4px 0 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { border: 1px solid #777; padding: ${cellPad}; font-size: ${cellSz}; vertical-align: middle; text-align: center; }
+        th { background: #e8f5ed; color: #14532d; font-weight: bold; }
+        tfoot td { background: #f1f5f3; font-weight: bold; }
+        .sts-H { font-weight: bold; color: #15803d; }
+        .sts-I { font-weight: bold; color: #b45309; }
+        .sts-S { font-weight: bold; color: #1d4ed8; }
+        .sts-A { font-weight: bold; color: #b91c1c; }
+        .sign-wrap { margin-top: 20px; display: flex; justify-content: space-between; font-size: 9.5px; }
+      </style></head><body>
+      <h2>MTs PIQ Singosari Malang</h2>
+      <h3>${this._escHtml(title)}</h3>
+      ${subtitle ? `<p class="sub">${this._escHtml(subtitle)}</p>` : ''}
+      ${tableHtml}
+      <div class="sign-wrap">
+        <div>
+          <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
+        </div>
+        <div style="text-align:right">
+          <p>Singosari, ${new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric' })}<br>${this._escHtml(rightSignerLabel || 'Waka Kurikulum / Operator')}<br><br><br><br><b>_____________________</b></p>
+        </div>
+      </div>
+      </body></html>
+    `);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 250);
+  },
 
   _escHtml(s) {
     if(!s) return '';
