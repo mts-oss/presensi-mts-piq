@@ -826,209 +826,712 @@ export const LaporanPage = {
   },
 
   // ==================================
-  // LAPORAN GURU
+  // LAPORAN GURU (HARIAN & BULANAN + EXCEL/PDF)
   // ==================================
   _renderLaporanGuru(content) {
+    const now = new Date();
     const today = store.todayISO();
-    let selDate = today;
+    let mode       = 'bulanan'; // 'bulanan' | 'harian'
+    let selDate    = today;
+    let selMonth   = now.getMonth() + 1;
+    let selYear    = now.getFullYear();
+    let selTeacher = 'all'; // 'all' | teacher.id
+    let renderToken = 0;
 
-    const render = () => {
-      const HARI_LABEL = ['Ahad','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
-      const hari = HARI_LABEL[new Date(selDate + 'T00:00:00').getDay()];
+    const HARI_LABEL = ['Ahad','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
 
-      const teacherStatus = store.getTeacherStatusToday(selDate);
-      const jam           = store.getJam();
-      const classes       = store.getClasses();
-      const subjects      = store.getSubjects();
+    const downloadExcelWorkbook = (sheets, filename) => {
+      if (typeof XLSX !== 'undefined') {
+        const wb = XLSX.utils.book_new();
+        sheets.forEach(({ name, rows, colWidths }) => {
+          const ws = XLSX.utils.aoa_to_sheet(rows);
+          if (colWidths) {
+            ws['!cols'] = colWidths.map(w => ({ wch: w }));
+          }
+          XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+        });
+        XLSX.writeFile(wb, filename);
+        if (window._toast) window._toast(`✓ File Excel berhasil diunduh: ${filename}`, 'success');
+      } else {
+        // Fallback CSV if SheetJS CDN unavailable
+        const firstRows = sheets[0]?.rows || [];
+        const csv = firstRows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename.replace(/\.xlsx$/i, '.csv');
+        a.click();
+        if (window._toast) window._toast('⚠ Library Excel offline — diunduh sebagai CSV', 'warning');
+      }
+    };
 
-      // ── Collect all class IDs that appear in any teacher's schedule today ──
-      const classIds = [...new Set(
-        teacherStatus.flatMap(t => t.schedules.map(s => String(s.class_id)))
-      )];
-      // Sort by class order
-      const gridClasses = classes.filter(c => classIds.includes(String(c.id)));
-
-      // ── Summary counts ──
-      const doneCount    = teacherStatus.filter(t => t.done === t.total).length;
-      const notDoneCount = teacherStatus.length - doneCount;
-
-      content.innerHTML = `
-        <div class="stack">
-
-          <!-- Date filter -->
-          <div class="card" style="padding:0.75rem">
-            <div class="row" style="gap:0.75rem;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
-              <div class="row" style="gap:0.75rem;align-items:flex-end">
-                <div class="form-group" style="margin:0">
-                  <label>Tanggal</label>
-                  <input type="date" id="sel-date" class="form-control" value="${selDate}" style="font-size:0.82rem">
-                </div>
-                <div style="font-size:0.9rem;font-weight:700;color:var(--primary)">${hari}</div>
-              </div>
-              <button class="btn btn-outline btn-sm" id="btn-sync-cloud" title="Muat ulang seluruh data terbaru dari cloud">
-                🔄 Sync Data Cloud
-              </button>
-            </div>
+    const openPrintPdf = ({ title, subtitle, tableHtml, rightSignerLabel }) => {
+      const win = window.open('', '_blank');
+      if (!win) {
+        alert('Popup diblokir browser. Izinkan popup untuk mencetak / simpan PDF.');
+        return;
+      }
+      win.document.write(`
+        <!DOCTYPE html><html lang="id"><head>
+        <meta charset="UTF-8"><title>${this._escHtml(title)}</title>
+        <style>
+          @page { size: landscape; margin: 0.9cm; }
+          body { font-family: Arial, sans-serif; font-size: 10px; color: #111; padding: 0.4cm; }
+          h2, h3 { text-align: center; margin: 2px 0; }
+          p.sub { text-align: center; font-size: 9.5px; color: #444; margin: 4px 0 10px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #777; padding: 4px 6px; font-size: 9px; vertical-align: middle; }
+          th { background: #e8f5ed; color: #14532d; font-weight: bold; }
+          tfoot td { background: #f1f5f3; font-weight: bold; }
+          .sign-wrap { margin-top: 22px; display: flex; justify-content: space-between; font-size: 9.5px; }
+        </style></head><body>
+        <h2>MTs PIQ Singosari Malang</h2>
+        <h3>${this._escHtml(title)}</h3>
+        ${subtitle ? `<p class="sub">${this._escHtml(subtitle)}</p>` : ''}
+        ${tableHtml}
+        <div class="sign-wrap">
+          <div>
+            <p>Mengetahui,<br>Kepala Madrasah<br><br><br><br><b>_____________________</b></p>
           </div>
-
-          ${teacherStatus.length === 0 ? `
-            <div class="empty-state">
-              <p>Tidak ada jadwal mengajar pada hari <b>${hari}</b>.</p>
-            </div>
-          ` : `
-
-          <!-- Summary bar -->
-          <div class="card" style="padding:0.65rem 0.85rem">
-            <div class="row" style="justify-content:space-between;gap:0.5rem">
-              <div style="font-size:0.8rem;color:var(--text-sub)">
-                Laporan <b>${hari}</b> — ${teacherStatus.length} guru mengajar
-              </div>
-              <div class="row" style="gap:0.5rem">
-                <span style="font-size:0.78rem;font-weight:700;color:#15803d;background:#dcfce7;padding:0.2rem 0.6rem;border-radius:20px">
-                  ✓ Sudah: ${doneCount}
-                </span>
-                <span style="font-size:0.78rem;font-weight:700;color:#b91c1c;background:#fee2e2;padding:0.2rem 0.6rem;border-radius:20px">
-                  ✗ Belum: ${notDoneCount}
-                </span>
-              </div>
-            </div>
-            <!-- Progress bar -->
-            <div style="margin-top:0.5rem;height:6px;background:#e5e7eb;border-radius:4px;overflow:hidden">
-              <div style="height:100%;width:${teacherStatus.length > 0 ? Math.round(doneCount/teacherStatus.length*100) : 0}%;background:#16a34a;border-radius:4px;transition:width 0.4s"></div>
-            </div>
+          <div style="text-align:right">
+            <p>Singosari, ${new Date().toLocaleDateString('id-ID', { day:'numeric', month:'long', year:'numeric' })}<br>${this._escHtml(rightSignerLabel || 'Waka Kurikulum / Operator')}<br><br><br><br><b>_____________________</b></p>
           </div>
-
-          <!-- Grid Table: Guru × Kelas -->
-          <div style="overflow-x:auto">
-            <table style="border-collapse:collapse;width:100%;min-width:max-content;font-size:0.78rem">
-              <thead>
-                <tr style="background:#f0faf4">
-                  <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap;min-width:160px">
-                    Guru
-                  </th>
-                  <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">
-                    Jam
-                  </th>
-                  <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">
-                    Mapel
-                  </th>
-                  ${gridClasses.map(cls => `
-                    <th style="border:1px solid #d1e8dc;padding:0.5rem 0.6rem;text-align:center;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap;min-width:80px">
-                      ${this._escHtml(cls.nama_kelas)}
-                    </th>
-                  `).join('')}
-                  <th style="border:1px solid #d1e8dc;padding:0.5rem 0.6rem;text-align:center;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                ${teacherStatus.map(t => {
-                  // Each teacher may have multiple schedules (different jam/class)
-                  // Group by lesson_hour_id for rows
-                  const sortedScheds = [...t.schedules].sort((a, b) => {
-                    const ja = jam.find(j => String(j.id) === String(a.lesson_hour_id));
-                    const jb = jam.find(j => String(j.id) === String(b.lesson_hour_id));
-                    return (ja?.urutan || 0) - (jb?.urutan || 0);
-                  });
-
-                  const allDone   = t.done === t.total;
-                  const rowBg     = allDone ? '#f0fdf4' : '#fff7f7';
-                  const borderClr = allDone ? '#86efac' : '#fca5a5';
-
-                  return sortedScheds.map((sch, schIdx) => {
-                    const j       = jam.find(x => String(x.id) === String(sch.lesson_hour_id));
-                    const mapel   = subjects.find(s => String(s.id) === String(sch.subject_id));
-                    const isDone  = sch.done;
-                    const cellBg  = isDone ? '#dcfce7' : '#fee2e2';
-                    const cellClr = isDone ? '#15803d' : '#b91c1c';
-                    const cellBdr = isDone ? '#86efac' : '#fca5a5';
-
-                    // Teacher name only shown on first row
-                    const teacherCell = schIdx === 0 ? `
-                      <td rowspan="${sortedScheds.length}"
-                        style="border:1px solid ${borderClr};padding:0.5rem 0.65rem;background:${rowBg};vertical-align:middle">
-                        <div style="font-weight:700;font-size:0.82rem;color:#1a2b23">${this._escHtml(t.teacher.nama)}</div>
-                        <div style="font-size:0.68rem;color:#4a6358;margin-top:1px">${t.teacher.kode}</div>
-                      </td>
-                    ` : '';
-
-                    // Build class cells
-                    const classCells = gridClasses.map(cls => {
-                      // Does this teacher schedule match this class?
-                      if (String(sch.class_id) === String(cls.id)) {
-                        return `
-                          <td style="border:1px solid ${cellBdr};padding:0.4rem 0.5rem;text-align:center;background:${cellBg};font-weight:700;font-size:0.85rem;color:${cellClr}">
-                            ${isDone ? '✓' : '✗'}
-                          </td>`;
-                      }
-                      return `<td style="border:1px solid #e5e7eb;padding:0.4rem;text-align:center;color:#d1d5db;background:#f9fafb">—</td>`;
-                    }).join('');
-
-                    return `
-                      <tr>
-                        ${teacherCell}
-                        <td style="border:1px solid ${borderClr};padding:0.4rem 0.65rem;background:${rowBg};white-space:nowrap;font-size:0.72rem;color:#1a7a4a;font-weight:600">
-                          ${j ? `${j.nama}<br><span style="font-weight:400;color:#7a9688">${j.jam_mulai}–${j.jam_selesai}</span>` : '—'}
-                        </td>
-                        <td style="border:1px solid ${borderClr};padding:0.4rem 0.65rem;background:${rowBg};white-space:nowrap;font-size:0.75rem;color:#1a2b23">
-                          ${this._escHtml(mapel?.pelajaran || '—')}
-                        </td>
-                        ${classCells}
-                        ${schIdx === 0 ? `
-                          <td rowspan="${sortedScheds.length}"
-                            style="border:1px solid ${borderClr};padding:0.4rem 0.6rem;text-align:center;background:${rowBg};vertical-align:middle">
-                            <div style="font-size:0.78rem;font-weight:700;color:${allDone ? '#15803d' : '#b91c1c'}">
-                              ${allDone ? '✓ Selesai' : `${t.done}/${t.total} jam`}
-                            </div>
-                            <div style="font-size:0.65rem;color:${allDone ? '#16a34a' : '#dc2626'};margin-top:0.1rem">
-                              ${allDone ? 'Lengkap' : 'Belum selesai'}
-                            </div>
-                          </td>
-                        ` : ''}
-                      </tr>
-                    `;
-                  }).join('');
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Legend -->
-          <div class="row" style="gap:0.75rem;font-size:0.72rem">
-            <span style="display:flex;align-items:center;gap:0.3rem">
-              <span style="width:14px;height:14px;background:#dcfce7;border:1px solid #86efac;border-radius:3px;display:inline-block"></span>
-              <span style="color:#15803d;font-weight:600">Sudah mengisi absensi</span>
-            </span>
-            <span style="display:flex;align-items:center;gap:0.3rem">
-              <span style="width:14px;height:14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;display:inline-block"></span>
-              <span style="color:#b91c1c;font-weight:600">Belum mengisi absensi</span>
-            </span>
-          </div>
-
-          `}
         </div>
-      `;
+        </body></html>
+      `);
+      win.document.close();
+      win.focus();
+      setTimeout(() => win.print(), 250);
+    };
 
-      content.querySelector('#sel-date')?.addEventListener('change', e => {
-        selDate = e.target.value;
-        render();
-      });
+    const render = async (forceRefresh = false) => {
+      const token = ++renderToken;
 
-      content.querySelector('#btn-sync-cloud')?.addEventListener('click', async () => {
-        const btn = content.querySelector('#btn-sync-cloud');
-        if (!btn) return;
-        btn.disabled = true;
-        btn.innerHTML = '🔄 Syncing...';
-        try {
-          await store.forceSyncAll();
-          if (window._toast) window._toast('✓ Data berhasil diperbarui dari cloud!', 'success');
-        } catch (e) {
-          console.error(e);
-        } finally {
-          render();
+      if (forceRefresh) {
+        content.innerHTML = `<div class="loader"><div class="spinner"></div></div><p style="text-align:center;font-size:0.8rem;color:var(--text-muted)">Memuat data terbaru dari server...</p>`;
+        await store.forceSyncAll();
+        if (token !== renderToken) return;
+      }
+
+      const teachers  = [...store.getTeachers()].sort((a, b) => (a.nama || '').localeCompare(b.nama || ''));
+      const schedules = store.getSchedules();
+      const sessions  = store.getSessions();
+      const jam       = store.getJam();
+      const classes   = store.getClasses();
+      const subjects  = store.getSubjects();
+
+      const jamById     = new Map(jam.map(j => [String(j.id), j]));
+      const classById   = new Map(classes.map(c => [String(c.id), c]));
+      const subjectById = new Map(subjects.map(s => [String(s.id), s]));
+      const schedById   = new Map(schedules.map(s => [String(s.id), s]));
+
+      if (mode === 'bulanan') {
+        const prefix = `${selYear}-${String(selMonth).padStart(2, '0')}`;
+        const monthSessions = sessions.filter(s => s.tanggal && s.tanggal.startsWith(prefix));
+        const daysInMonth = new Date(selYear, selMonth, 0).getDate();
+
+        // Count how many times each day-name occurs in the selected month
+        const dayCounts = {};
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dt = new Date(selYear, selMonth - 1, d);
+          const hName = HARI_LABEL[dt.getDay()];
+          dayCounts[hName] = (dayCounts[hName] || 0) + 1;
         }
-      });
+
+        // Build per-teacher monthly summary
+        const teacherRecaps = teachers.map(teacher => {
+          const myScheds = schedules.filter(s => String(s.teacher_id) === String(teacher.id));
+          const mySchedIds = new Set(myScheds.map(s => String(s.id)));
+
+          // Target JP in this month from weekly schedules
+          let targetJP = 0;
+          myScheds.forEach(s => {
+            targetJP += (dayCounts[s.hari] || 0);
+          });
+
+          // Sessions taught by this teacher in this month (by teacher_id or schedule_id)
+          const myMonthSessions = monthSessions.filter(sess => {
+            if (String(sess.teacher_id) === String(teacher.id)) return true;
+            const sc = schedById.get(String(sess.schedule_id));
+            return sc && mySchedIds.has(String(sc.id));
+          });
+
+          // Sort sessions chronologically
+          myMonthSessions.sort((a, b) => {
+            if (a.tanggal !== b.tanggal) return a.tanggal.localeCompare(b.tanggal);
+            const ja = jamById.get(String(a.lesson_hour_id));
+            const jb = jamById.get(String(b.lesson_hour_id));
+            return (ja?.urutan || 0) - (jb?.urutan || 0);
+          });
+
+          const uniqueDays = new Set(myMonthSessions.map(s => s.tanggal));
+          const terisiJP = myMonthSessions.length;
+          const belumJP = Math.max(0, targetJP - terisiJP);
+          const pct = targetJP > 0 ? Math.min(100, Math.round((terisiJP / targetJP) * 100)) : (terisiJP > 0 ? 100 : 0);
+
+          // Unique mapel & kelas
+          const mapelNames = [...new Set([
+            ...myScheds.map(s => subjectById.get(String(s.subject_id))?.pelajaran),
+            ...myMonthSessions.map(s => subjectById.get(String(s.subject_id))?.pelajaran)
+          ].filter(Boolean))];
+
+          const classNames = [...new Set([
+            ...myScheds.map(s => classById.get(String(s.class_id))?.nama_kelas),
+            ...myMonthSessions.map(s => classById.get(String(s.class_id))?.nama_kelas)
+          ].filter(Boolean))];
+
+          return {
+            teacher,
+            mapelText: mapelNames.join(', ') || '—',
+            kelasText: classNames.join(', ') || '—',
+            hariMengajar: uniqueDays.size,
+            targetJP,
+            terisiJP,
+            belumJP,
+            pct,
+            sessions: myMonthSessions
+          };
+        });
+
+        const isSingleTeacher = selTeacher !== 'all';
+        const activeRecap = isSingleTeacher
+          ? teacherRecaps.find(r => String(r.teacher.id) === String(selTeacher))
+          : null;
+
+        // If single teacher selected, ensure attendances for their sessions are loaded so H/I/S/A counts are accurate
+        let attMap = new Map();
+        if (activeRecap && activeRecap.sessions.length > 0) {
+          const sessIds = activeRecap.sessions.map(s => s.id);
+          if (store.isCloudEnabled() && !store.hasAttendancesForSessions(sessIds)) {
+            content.innerHTML = `<div class="loader"><div class="spinner"></div></div><p style="text-align:center;font-size:0.8rem;color:var(--text-muted)">Memuat detail presensi guru...</p>`;
+            await store.ensureAttendancesForSessions(sessIds);
+            if (token !== renderToken) return;
+          }
+          const sessIdSet = new Set(sessIds.map(String));
+          store.getAttendances().forEach(a => {
+            if (!sessIdSet.has(String(a.session_id))) return;
+            const k = String(a.session_id);
+            if (!attMap.has(k)) attMap.set(k, { H:0, I:0, S:0, A:0 });
+            const st = attMap.get(k);
+            if (st[a.status] !== undefined) st[a.status]++;
+          });
+        }
+
+        // Totals for all-teachers table
+        const grandTarget = teacherRecaps.reduce((acc, r) => acc + r.targetJP, 0);
+        const grandTerisi = teacherRecaps.reduce((acc, r) => acc + r.terisiJP, 0);
+        const grandBelum  = teacherRecaps.reduce((acc, r) => acc + r.belumJP, 0);
+        const grandPct    = grandTarget > 0 ? Math.min(100, Math.round((grandTerisi / grandTarget) * 100)) : 0;
+
+        content.innerHTML = `
+          <div class="stack">
+            <!-- Filters -->
+            <div class="card" style="padding:0.75rem">
+              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
+                <div class="form-group" style="margin:0;min-width:150px">
+                  <label>Mode Laporan</label>
+                  <select id="sel-guru-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
+                    <option value="bulanan" selected>📊 Rekap Bulanan</option>
+                    <option value="harian">📋 Harian (Per Tanggal)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;flex:1;min-width:180px">
+                  <label>Pilih Guru</label>
+                  <select id="sel-guru-filter" class="form-control" style="font-size:0.82rem">
+                    <option value="all" ${selTeacher==='all'?'selected':''}>Semua Guru (${teachers.length})</option>
+                    ${teachers.map(t => `<option value="${t.id}" ${String(selTeacher)===String(t.id)?'selected':''}>${this._escHtml(t.nama)} (${t.kode})</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:110px">
+                  <label>Bulan</label>
+                  <select id="sel-guru-month" class="form-control" style="font-size:0.82rem">
+                    ${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===selMonth?'selected':''}>${m}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:80px">
+                  <label>Tahun</label>
+                  <input type="number" id="sel-guru-year" class="form-control" value="${selYear}" style="font-size:0.82rem">
+                </div>
+                <div style="display:flex;gap:0.4rem;margin-left:auto;flex-wrap:wrap">
+                  <button class="btn btn-outline btn-sm" id="btn-sync-cloud" title="Muat ulang data terbaru dari server">🔄 Sync</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-guru-excel" title="Unduh rekapan dalam format Excel (.xlsx)">📊 Excel</button>
+                  <button class="btn btn-primary btn-sm" id="btn-guru-pdf" title="Cetak atau simpan sebagai PDF">📄 PDF / Cetak</button>
+                </div>
+              </div>
+            </div>
+
+            ${!isSingleTeacher ? `
+              <!-- Summary Info -->
+              <div class="card" style="padding:0.65rem 0.85rem;background:var(--primary-tint);border-color:#bbf7d0">
+                <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem;font-size:0.78rem">
+                  <div>
+                    <b style="color:var(--primary)">📊 Rekapitulasi Mengajar Guru:</b>
+                    <span style="font-weight:600">${MONTHS[selMonth-1]} ${selYear}</span>
+                    <span style="color:var(--text-muted);margin-left:0.5rem">• ${teachers.length} Guru • ${grandTerisi} / ${grandTarget} JP Terisi (${grandPct}%)</span>
+                  </div>
+                  <div style="color:var(--text-muted);font-size:0.74rem">
+                    Klik <b>📊 Excel</b> untuk mengunduh ringkasan + rincian jurnal mengajar semua guru
+                  </div>
+                </div>
+              </div>
+
+              <!-- Table: All Teachers Recap -->
+              <div class="table-wrap" style="overflow-x:auto;max-width:100%">
+                <table id="guru-rekap-table" style="width:100%;min-width:max-content;border-collapse:collapse;font-size:0.76rem">
+                  <thead>
+                    <tr style="background:#f0faf4">
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">#</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Kode</th>
+                      <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.6rem;min-width:170px">Nama Guru</th>
+                      <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.6rem;min-width:150px">Mata Pelajaran</th>
+                      <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.6rem;min-width:120px">Kelas</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Hari Mengajar</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Target JP</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem;color:var(--hadir)">JP Terisi</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem;color:var(--alpa)">Belum Diisi</th>
+                      <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">% Terisi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${teacherRecaps.map((r, idx) => `
+                      <tr class="guru-row" data-teacher-id="${r.teacher.id}" style="background:${idx % 2 === 0 ? '#ffffff' : '#fcfdfc'};cursor:pointer" title="Klik untuk melihat rincian mengajar ${this._escHtml(r.teacher.nama)}">
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem">${idx+1}</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem;font-weight:600;color:var(--text-sub)">${this._escHtml(r.teacher.kode)}</td>
+                        <td style="border:1px solid var(--border);padding:0.4rem 0.6rem;font-weight:600;color:var(--primary)">${this._escHtml(r.teacher.nama)}</td>
+                        <td style="border:1px solid var(--border);padding:0.4rem 0.6rem;max-width:220px">${this._escHtml(r.mapelText)}</td>
+                        <td style="border:1px solid var(--border);padding:0.4rem 0.6rem;max-width:180px">${this._escHtml(r.kelasText)}</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem">${r.hariMengajar} hr</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem;font-weight:600">${r.targetJP}</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem;font-weight:700;color:var(--hadir);background:#f0fdf4">${r.terisiJP}</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem;font-weight:700;color:${r.belumJP > 0 ? 'var(--alpa)' : 'var(--text-muted)'};background:${r.belumJP > 0 ? '#fef2f2' : 'inherit'}">${r.belumJP}</td>
+                        <td style="text-align:center;border:1px solid var(--border);padding:0.4rem 0.5rem;font-weight:700;color:${r.pct >= 80 ? '#15803d' : r.pct >= 50 ? '#b45309' : '#b91c1c'}">${r.pct}%</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                  <tfoot>
+                    <tr style="background:#f1f5f3;font-weight:700">
+                      <td colspan="6" style="text-align:right;border:1px solid var(--border);padding:0.45rem 0.6rem">TOTAL KESELURUHAN:</td>
+                      <td style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">${grandTarget}</td>
+                      <td style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem;color:var(--hadir)">${grandTerisi}</td>
+                      <td style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem;color:var(--alpa)">${grandBelum}</td>
+                      <td style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">${grandPct}%</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            ` : !activeRecap ? `
+              <div class="empty-state"><p>Data guru tidak ditemukan.</p></div>
+            ` : `
+              <!-- Single Teacher Summary Card -->
+              <div class="card" style="padding:0.75rem 0.9rem;background:var(--primary-tint);border-color:#bbf7d0">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem">
+                  <div>
+                    <div style="font-size:0.92rem;font-weight:700;color:var(--primary)">${this._escHtml(activeRecap.teacher.nama)} (${this._escHtml(activeRecap.teacher.kode)})</div>
+                    <div style="font-size:0.74rem;color:var(--text-sub);margin-top:2px">
+                      Periode: <b>${MONTHS[selMonth-1]} ${selYear}</b> • Mapel: ${this._escHtml(activeRecap.mapelText)} • Kelas: ${this._escHtml(activeRecap.kelasText)}
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;font-size:0.75rem">
+                    <span style="background:#fff;border:1px solid #bbf7d0;padding:0.25rem 0.55rem;border-radius:8px">Hari Mengajar: <b>${activeRecap.hariMengajar}</b></span>
+                    <span style="background:#fff;border:1px solid #bbf7d0;padding:0.25rem 0.55rem;border-radius:8px">Target: <b>${activeRecap.targetJP} JP</b></span>
+                    <span style="background:#dcfce7;color:#15803d;padding:0.25rem 0.55rem;border-radius:8px">Terisi: <b>${activeRecap.terisiJP} JP (${activeRecap.pct}%)</b></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Single Teacher Detail Table -->
+              ${activeRecap.sessions.length === 0 ? `
+                <div class="empty-state"><p>Belum ada catatan presensi/jurnal untuk guru ini pada ${MONTHS[selMonth-1]} ${selYear}.</p></div>
+              ` : `
+                <div class="table-wrap" style="overflow-x:auto;max-width:100%">
+                  <table id="guru-rekap-table" style="width:100%;min-width:max-content;border-collapse:collapse;font-size:0.75rem">
+                    <thead>
+                      <tr style="background:#f0faf4">
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.4rem">#</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Tanggal</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Hari</th>
+                        <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.5rem">Jam Pelajaran</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.5rem">Kelas</th>
+                        <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.5rem">Mapel</th>
+                        <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.5rem;min-width:160px">Materi</th>
+                        <th style="text-align:left;border:1px solid var(--border);padding:0.45rem 0.5rem;min-width:140px">Catatan Jurnal</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.4rem;color:var(--hadir)">H</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.4rem;color:var(--izin)">I</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.4rem;color:var(--sakit)">S</th>
+                        <th style="text-align:center;border:1px solid var(--border);padding:0.45rem 0.4rem;color:var(--alpa)">A</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${activeRecap.sessions.map((sess, idx) => {
+                        const dt = new Date(sess.tanggal + 'T00:00:00');
+                        const hariNama = HARI_LABEL[dt.getDay()];
+                        const j = jamById.get(String(sess.lesson_hour_id));
+                        const kls = classById.get(String(sess.class_id));
+                        const mpl = subjectById.get(String(sess.subject_id));
+                        const st = attMap.get(String(sess.id)) || { H:0, I:0, S:0, A:0 };
+                        return `
+                          <tr style="background:${idx % 2 === 0 ? '#ffffff' : '#fcfdfc'}">
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.4rem">${idx+1}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.5rem;white-space:nowrap">${sess.tanggal}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.5rem">${hariNama}</td>
+                            <td style="border:1px solid var(--border);padding:0.35rem 0.5rem;white-space:nowrap">${j ? `${j.nama} (${j.jam_mulai}–${j.jam_selesai})` : '—'}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.5rem;font-weight:600">${this._escHtml(kls?.nama_kelas || '—')}</td>
+                            <td style="border:1px solid var(--border);padding:0.35rem 0.5rem">${this._escHtml(mpl?.pelajaran || '—')}</td>
+                            <td style="border:1px solid var(--border);padding:0.35rem 0.5rem">${this._escHtml(sess.materi || '—')}</td>
+                            <td style="border:1px solid var(--border);padding:0.35rem 0.5rem">${this._escHtml(sess.catatan_jurnal || '—')}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.4rem;font-weight:700;color:var(--hadir)">${st.H}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.4rem;font-weight:700;color:var(--izin)">${st.I}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.4rem;font-weight:700;color:var(--sakit)">${st.S}</td>
+                            <td style="text-align:center;border:1px solid var(--border);padding:0.35rem 0.4rem;font-weight:700;color:var(--alpa)">${st.A}</td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            `}
+          </div>
+        `;
+
+        // Click row in all-teachers table to drill down to that teacher
+        content.querySelectorAll('.guru-row[data-teacher-id]').forEach(tr => {
+          tr.addEventListener('click', () => {
+            selTeacher = tr.dataset.teacherId;
+            render();
+          });
+        });
+
+        content.querySelector('#sel-guru-mode')?.addEventListener('change', e => {
+          mode = e.target.value;
+          render();
+        });
+        content.querySelector('#sel-guru-filter')?.addEventListener('change', e => {
+          selTeacher = e.target.value;
+          render();
+        });
+        content.querySelector('#sel-guru-month')?.addEventListener('change', e => {
+          selMonth = parseInt(e.target.value);
+          render();
+        });
+        content.querySelector('#sel-guru-year')?.addEventListener('change', e => {
+          selYear = parseInt(e.target.value);
+          render();
+        });
+        content.querySelector('#btn-sync-cloud')?.addEventListener('click', () => render(true));
+
+        // Export Excel (.xlsx)
+        content.querySelector('#btn-guru-excel')?.addEventListener('click', () => {
+          const periodLabel = `${MONTHS[selMonth-1]}_${selYear}`;
+          if (!isSingleTeacher) {
+            const summaryRows = [
+              [`REKAPITULASI MENGAJAR GURU — MTs PIQ SINGOSARI MALANG`],
+              [`Periode: ${MONTHS[selMonth-1]} ${selYear}`],
+              [],
+              ['No', 'Kode Guru', 'Nama Guru', 'Mata Pelajaran', 'Kelas', 'Hari Mengajar', 'Target JP', 'JP Terisi', 'Belum Diisi', 'Persentase (%)'],
+              ...teacherRecaps.map((r, i) => [
+                i + 1, r.teacher.kode, r.teacher.nama, r.mapelText, r.kelasText,
+                r.hariMengajar, r.targetJP, r.terisiJP, r.belumJP, `${r.pct}%`
+              ]),
+              ['', '', 'TOTAL KESELURUHAN', '', '', '', grandTarget, grandTerisi, grandBelum, `${grandPct}%`]
+            ];
+
+            const detailRows = [
+              [`RINCIAN JURNAL & PRESENSI MENGAJAR — ${MONTHS[selMonth-1]} ${selYear}`],
+              [],
+              ['No', 'Tanggal', 'Hari', 'Kode Guru', 'Nama Guru', 'Jam Pelajaran', 'Kelas', 'Mata Pelajaran', 'Materi', 'Catatan Jurnal']
+            ];
+            let dNo = 1;
+            teacherRecaps.forEach(r => {
+              r.sessions.forEach(sess => {
+                const dt = new Date(sess.tanggal + 'T00:00:00');
+                const j = jamById.get(String(sess.lesson_hour_id));
+                const kls = classById.get(String(sess.class_id));
+                const mpl = subjectById.get(String(sess.subject_id));
+                detailRows.push([
+                  dNo++,
+                  sess.tanggal,
+                  HARI_LABEL[dt.getDay()],
+                  r.teacher.kode,
+                  r.teacher.nama,
+                  j ? `${j.nama} (${j.jam_mulai}-${j.jam_selesai})` : '-',
+                  kls?.nama_kelas || '-',
+                  mpl?.pelajaran || '-',
+                  sess.materi || '-',
+                  sess.catatan_jurnal || '-'
+                ]);
+              });
+            });
+
+            downloadExcelWorkbook([
+              { name: 'Rekap Guru', rows: summaryRows, colWidths: [5, 12, 30, 26, 20, 14, 12, 12, 12, 14] },
+              { name: 'Rincian Jurnal', rows: detailRows, colWidths: [5, 12, 10, 12, 28, 22, 10, 22, 32, 28] }
+            ], `Rekap_Guru_${periodLabel}.xlsx`);
+          } else if (activeRecap) {
+            const safeName = (activeRecap.teacher.nama || 'Guru').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const summaryRows = [
+              [`REKAPITULASI MENGAJAR GURU — MTs PIQ SINGOSARI MALANG`],
+              [`Nama Guru: ${activeRecap.teacher.nama} (${activeRecap.teacher.kode})`],
+              [`Periode: ${MONTHS[selMonth-1]} ${selYear}`],
+              [`Mapel: ${activeRecap.mapelText} | Kelas: ${activeRecap.kelasText}`],
+              [],
+              ['Hari Mengajar', 'Target JP', 'JP Terisi', 'Belum Diisi', 'Persentase (%)'],
+              [activeRecap.hariMengajar, activeRecap.targetJP, activeRecap.terisiJP, activeRecap.belumJP, `${activeRecap.pct}%`]
+            ];
+            const detailRows = [
+              [`RINCIAN MENGAJAR: ${activeRecap.teacher.nama} (${MONTHS[selMonth-1]} ${selYear})`],
+              [],
+              ['No', 'Tanggal', 'Hari', 'Jam Pelajaran', 'Kelas', 'Mata Pelajaran', 'Materi', 'Catatan Jurnal', 'H', 'I', 'S', 'A'],
+              ...activeRecap.sessions.map((sess, i) => {
+                const dt = new Date(sess.tanggal + 'T00:00:00');
+                const j = jamById.get(String(sess.lesson_hour_id));
+                const kls = classById.get(String(sess.class_id));
+                const mpl = subjectById.get(String(sess.subject_id));
+                const st = attMap.get(String(sess.id)) || { H:0, I:0, S:0, A:0 };
+                return [
+                  i + 1, sess.tanggal, HARI_LABEL[dt.getDay()],
+                  j ? `${j.nama} (${j.jam_mulai}-${j.jam_selesai})` : '-',
+                  kls?.nama_kelas || '-', mpl?.pelajaran || '-',
+                  sess.materi || '-', sess.catatan_jurnal || '-',
+                  st.H, st.I, st.S, st.A
+                ];
+              })
+            ];
+            downloadExcelWorkbook([
+              { name: 'Rincian Mengajar', rows: detailRows, colWidths: [5, 12, 10, 22, 10, 22, 32, 28, 6, 6, 6, 6] },
+              { name: 'Ringkasan', rows: summaryRows, colWidths: [16, 14, 14, 14, 16] }
+            ], `Rekap_Guru_${safeName}_${periodLabel}.xlsx`);
+          }
+        });
+
+        // Export PDF / Print
+        content.querySelector('#btn-guru-pdf')?.addEventListener('click', () => {
+          const tableEl = document.getElementById('guru-rekap-table');
+          if (!tableEl) {
+            alert('Tidak ada data untuk dicetak.');
+            return;
+          }
+          if (!isSingleTeacher) {
+            openPrintPdf({
+              title: `Rekapitulasi Mengajar Guru — ${MONTHS[selMonth-1]} ${selYear}`,
+              subtitle: `Total ${teachers.length} Guru • ${grandTerisi} / ${grandTarget} JP Terisi (${grandPct}%)`,
+              tableHtml: tableEl.outerHTML,
+              rightSignerLabel: 'Waka Kurikulum'
+            });
+          } else if (activeRecap) {
+            openPrintPdf({
+              title: `Rekap Mengajar Guru: ${activeRecap.teacher.nama} (${activeRecap.teacher.kode})`,
+              subtitle: `Periode: ${MONTHS[selMonth-1]} ${selYear} • Terisi: ${activeRecap.terisiJP} / ${activeRecap.targetJP} JP (${activeRecap.pct}%)`,
+              tableHtml: tableEl.outerHTML,
+              rightSignerLabel: `Guru Mapel (${activeRecap.teacher.nama})`
+            });
+          }
+        });
+
+      } else {
+        // ───────────────────────────────────────────
+        // MODE HARIAN: STATUS GURU PER TANGGAL
+        // ───────────────────────────────────────────
+        const hari = HARI_LABEL[new Date(selDate + 'T00:00:00').getDay()];
+        const teacherStatus = store.getTeacherStatusToday(selDate);
+
+        const classIds = [...new Set(
+          teacherStatus.flatMap(t => t.schedules.map(s => String(s.class_id)))
+        )];
+        const gridClasses = classes.filter(c => classIds.includes(String(c.id)));
+
+        const doneCount    = teacherStatus.filter(t => t.done === t.total).length;
+        const notDoneCount = teacherStatus.length - doneCount;
+
+        content.innerHTML = `
+          <div class="stack">
+            <!-- Filters -->
+            <div class="card" style="padding:0.75rem">
+              <div class="row" style="gap:0.65rem;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
+                <div class="row" style="gap:0.75rem;align-items:flex-end;flex-wrap:wrap">
+                  <div class="form-group" style="margin:0;min-width:150px">
+                    <label>Mode Laporan</label>
+                    <select id="sel-guru-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
+                      <option value="bulanan">📊 Rekap Bulanan</option>
+                      <option value="harian" selected>📋 Harian (Per Tanggal)</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="margin:0">
+                    <label>Tanggal</label>
+                    <input type="date" id="sel-date" class="form-control" value="${selDate}" style="font-size:0.82rem">
+                  </div>
+                  <div style="font-size:0.9rem;font-weight:700;color:var(--primary);padding-bottom:0.35rem">${hari}</div>
+                </div>
+                <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+                  <button class="btn btn-outline btn-sm" id="btn-sync-cloud" title="Muat ulang seluruh data terbaru dari cloud">🔄 Sync</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-guru-harian-excel" title="Unduh laporan harian Excel (.xlsx)">📊 Excel</button>
+                  <button class="btn btn-primary btn-sm" id="btn-guru-harian-pdf" title="Cetak atau simpan sebagai PDF">📄 PDF / Cetak</button>
+                </div>
+              </div>
+            </div>
+
+            ${teacherStatus.length === 0 ? `
+              <div class="empty-state">
+                <p>Tidak ada jadwal mengajar pada hari <b>${hari}</b>.</p>
+              </div>
+            ` : `
+            <!-- Summary bar -->
+            <div class="card" style="padding:0.65rem 0.85rem">
+              <div class="row" style="justify-content:space-between;gap:0.5rem">
+                <div style="font-size:0.8rem;color:var(--text-sub)">
+                  Laporan <b>${hari}, ${selDate}</b> — ${teacherStatus.length} guru mengajar
+                </div>
+                <div class="row" style="gap:0.5rem">
+                  <span style="font-size:0.78rem;font-weight:700;color:#15803d;background:#dcfce7;padding:0.2rem 0.6rem;border-radius:20px">
+                    ✓ Sudah: ${doneCount}
+                  </span>
+                  <span style="font-size:0.78rem;font-weight:700;color:#b91c1c;background:#fee2e2;padding:0.2rem 0.6rem;border-radius:20px">
+                    ✗ Belum: ${notDoneCount}
+                  </span>
+                </div>
+              </div>
+              <div style="margin-top:0.5rem;height:6px;background:#e5e7eb;border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:${teacherStatus.length > 0 ? Math.round(doneCount/teacherStatus.length*100) : 0}%;background:#16a34a;border-radius:4px;transition:width 0.4s"></div>
+              </div>
+            </div>
+
+            <!-- Grid Table: Guru × Kelas -->
+            <div style="overflow-x:auto">
+              <table id="guru-harian-table" style="border-collapse:collapse;width:100%;min-width:max-content;font-size:0.78rem">
+                <thead>
+                  <tr style="background:#f0faf4">
+                    <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap;min-width:160px">Guru</th>
+                    <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">Jam</th>
+                    <th style="border:1px solid #d1e8dc;padding:0.5rem 0.75rem;text-align:left;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">Mapel</th>
+                    ${gridClasses.map(cls => `
+                      <th style="border:1px solid #d1e8dc;padding:0.5rem 0.6rem;text-align:center;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap;min-width:80px">
+                        ${this._escHtml(cls.nama_kelas)}
+                      </th>
+                    `).join('')}
+                    <th style="border:1px solid #d1e8dc;padding:0.5rem 0.6rem;text-align:center;font-size:0.72rem;font-weight:700;color:#1a7a4a;white-space:nowrap">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${teacherStatus.map(t => {
+                    const sortedScheds = [...t.schedules].sort((a, b) => {
+                      const ja = jamById.get(String(a.lesson_hour_id));
+                      const jb = jamById.get(String(b.lesson_hour_id));
+                      return (ja?.urutan || 0) - (jb?.urutan || 0);
+                    });
+
+                    const allDone   = t.done === t.total;
+                    const rowBg     = allDone ? '#f0fdf4' : '#fff7f7';
+                    const borderClr = allDone ? '#86efac' : '#fca5a5';
+
+                    return sortedScheds.map((sch, schIdx) => {
+                      const j       = jamById.get(String(sch.lesson_hour_id));
+                      const mapel   = subjectById.get(String(sch.subject_id));
+                      const isDone  = sch.done;
+                      const cellBg  = isDone ? '#dcfce7' : '#fee2e2';
+                      const cellClr = isDone ? '#15803d' : '#b91c1c';
+                      const cellBdr = isDone ? '#86efac' : '#fca5a5';
+
+                      const teacherCell = schIdx === 0 ? `
+                        <td rowspan="${sortedScheds.length}" style="border:1px solid ${borderClr};padding:0.5rem 0.65rem;background:${rowBg};vertical-align:middle">
+                          <div style="font-weight:700;font-size:0.82rem;color:#1a2b23">${this._escHtml(t.teacher.nama)}</div>
+                          <div style="font-size:0.68rem;color:#4a6358;margin-top:1px">${t.teacher.kode}</div>
+                        </td>
+                      ` : '';
+
+                      const classCells = gridClasses.map(cls => {
+                        if (String(sch.class_id) === String(cls.id)) {
+                          return `<td style="border:1px solid ${cellBdr};padding:0.4rem 0.5rem;text-align:center;background:${cellBg};font-weight:700;font-size:0.85rem;color:${cellClr}">${isDone ? '✓' : '✗'}</td>`;
+                        }
+                        return `<td style="border:1px solid #e5e7eb;padding:0.4rem;text-align:center;color:#d1d5db;background:#f9fafb">—</td>`;
+                      }).join('');
+
+                      return `
+                        <tr>
+                          ${teacherCell}
+                          <td style="border:1px solid ${borderClr};padding:0.4rem 0.65rem;background:${rowBg};white-space:nowrap;font-size:0.72rem;color:#1a7a4a;font-weight:600">
+                            ${j ? `${j.nama}<br><span style="font-weight:400;color:#7a9688">${j.jam_mulai}–${j.jam_selesai}</span>` : '—'}
+                          </td>
+                          <td style="border:1px solid ${borderClr};padding:0.4rem 0.65rem;background:${rowBg};white-space:nowrap;font-size:0.75rem;color:#1a2b23">
+                            ${this._escHtml(mapel?.pelajaran || '—')}
+                          </td>
+                          ${classCells}
+                          ${schIdx === 0 ? `
+                            <td rowspan="${sortedScheds.length}" style="border:1px solid ${borderClr};padding:0.4rem 0.6rem;text-align:center;background:${rowBg};vertical-align:middle">
+                              <div style="font-size:0.78rem;font-weight:700;color:${allDone ? '#15803d' : '#b91c1c'}">${allDone ? '✓ Selesai' : `${t.done}/${t.total} jam`}</div>
+                              <div style="font-size:0.65rem;color:${allDone ? '#16a34a' : '#dc2626'};margin-top:0.1rem">${allDone ? 'Lengkap' : 'Belum selesai'}</div>
+                            </td>
+                          ` : ''}
+                        </tr>
+                      `;
+                    }).join('');
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Legend -->
+            <div class="row" style="gap:0.75rem;font-size:0.72rem">
+              <span style="display:flex;align-items:center;gap:0.3rem">
+                <span style="width:14px;height:14px;background:#dcfce7;border:1px solid #86efac;border-radius:3px;display:inline-block"></span>
+                <span style="color:#15803d;font-weight:600">Sudah mengisi absensi</span>
+              </span>
+              <span style="display:flex;align-items:center;gap:0.3rem">
+                <span style="width:14px;height:14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;display:inline-block"></span>
+                <span style="color:#b91c1c;font-weight:600">Belum mengisi absensi</span>
+              </span>
+            </div>
+            `}
+          </div>
+        `;
+
+        content.querySelector('#sel-guru-mode')?.addEventListener('change', e => {
+          mode = e.target.value;
+          render();
+        });
+        content.querySelector('#sel-date')?.addEventListener('change', e => {
+          selDate = e.target.value;
+          render();
+        });
+        content.querySelector('#btn-sync-cloud')?.addEventListener('click', () => render(true));
+
+        content.querySelector('#btn-guru-harian-excel')?.addEventListener('click', () => {
+          if (teacherStatus.length === 0) return alert('Tidak ada data untuk diunduh.');
+          const rows = [
+            [`LAPORAN KEHADIRAN MENGAJAR GURU HARIAN — MTs PIQ SINGOSARI MALANG`],
+            [`Hari/Tanggal: ${hari}, ${selDate}`],
+            [],
+            ['No', 'Kode', 'Nama Guru', 'Jam Pelajaran', 'Kelas', 'Mata Pelajaran', 'Status Mengisi']
+          ];
+          let no = 1;
+          teacherStatus.forEach(t => {
+            t.schedules.forEach(sch => {
+              const j = jamById.get(String(sch.lesson_hour_id));
+              const kls = classById.get(String(sch.class_id));
+              const mpl = subjectById.get(String(sch.subject_id));
+              rows.push([
+                no++, t.teacher.kode, t.teacher.nama,
+                j ? `${j.nama} (${j.jam_mulai}-${j.jam_selesai})` : '-',
+                kls?.nama_kelas || '-', mpl?.pelajaran || '-',
+                sch.done ? 'Sudah Mengisi' : 'Belum Mengisi'
+              ]);
+            });
+          });
+          downloadExcelWorkbook([
+            { name: `Harian ${selDate}`, rows, colWidths: [5, 10, 28, 22, 10, 22, 16] }
+          ], `Laporan_Guru_Harian_${selDate}.xlsx`);
+        });
+
+        content.querySelector('#btn-guru-harian-pdf')?.addEventListener('click', () => {
+          const tableEl = document.getElementById('guru-harian-table');
+          if (!tableEl) return alert('Tidak ada data untuk dicetak.');
+          openPrintPdf({
+            title: `Laporan Harian Mengajar Guru — ${hari}, ${selDate}`,
+            subtitle: `${teacherStatus.length} Guru Mengajar • Sudah Selesai: ${doneCount} • Belum Selesai: ${notDoneCount}`,
+            tableHtml: tableEl.outerHTML,
+            rightSignerLabel: 'Waka Kurikulum'
+          });
+        });
+      }
     };
 
     render();
