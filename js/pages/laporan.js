@@ -3,6 +3,10 @@ import { store } from '../store.js';
 
 const MONTHS = ['Januari','Februari','Maret','April','Mei','Juni',
                 'Juli','Agustus','September','Oktober','November','Desember'];
+const SEMESTERS = {
+  ganjil: { key: 'ganjil', label: 'Ganjil (Juli – Desember)', months: [7, 8, 9, 10, 11, 12] },
+  genap:  { key: 'genap',  label: 'Genap (Januari – Juni)',   months: [1, 2, 3, 4, 5, 6] },
+};
 
 export const LaporanPage = {
   _tab: 'harian', // 'harian' | 'guru'
@@ -56,7 +60,8 @@ export const LaporanPage = {
     let selTeacher = 'all'; // 'all' | teacher.id
     let selYear  = now.getFullYear();
     let selMonth = now.getMonth() + 1; // 1-indexed
-    let mode     = '5hari'; // '5hari' (default) | 'bulanan'
+    let selSemester = selMonth >= 7 ? 'ganjil' : 'genap';
+    let mode     = '5hari'; // '5hari' (default) | 'bulanan' | 'semester'
     let selStartDate = null; // ISO date for 5-day view
     let renderToken = 0;
 
@@ -234,6 +239,8 @@ export const LaporanPage = {
 
       // Filter sessions based on mode, class, and optional teacher
       const prefix = `${selYear}-${String(selMonth).padStart(2,'0')}`;
+      const semDef = SEMESTERS[selSemester] || SEMESTERS.ganjil;
+      const semPrefixes = semDef.months.map(m => `${selYear}-${String(m).padStart(2,'0')}`);
       const matchTeacher = (s) => {
         if (selTeacher === 'all') return true;
         if (String(s.teacher_id) === String(selTeacher)) return true;
@@ -242,6 +249,8 @@ export const LaporanPage = {
       };
       const mySessions = (mode === '5hari'
         ? sessions.filter(s => String(s.class_id) === String(selClass) && activeDates.includes(s.tanggal))
+        : mode === 'semester'
+        ? sessions.filter(s => String(s.class_id) === String(selClass) && semPrefixes.some(p => s.tanggal.startsWith(p)))
         : sessions.filter(s => String(s.class_id) === String(selClass) && s.tanggal.startsWith(prefix))
       ).filter(matchTeacher);
 
@@ -334,6 +343,7 @@ export const LaporanPage = {
                   <select id="sel-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
                     <option value="5hari" selected>📋 5 Hari (Semua JP)</option>
                     <option value="bulanan">📅 1 Bulan (Akumulasi JP)</option>
+                    <option value="semester">🎓 1 Semester (Jul–Des / Jan–Jun)</option>
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;min-width:95px">
@@ -617,6 +627,272 @@ export const LaporanPage = {
           });
         });
 
+      } else if (mode === 'semester') {
+        // ───────────────────────────────────────────
+        // MODE 3: REKAP 1 SEMESTER (PER BULAN: JUL-DES / JAN-JUN)
+        // ───────────────────────────────────────────
+        const semMonths = semDef.months.map(m => ({
+          num: m,
+          name: MONTHS[m - 1],
+          short: MONTHS[m - 1].slice(0, 3),
+          prefix: `${selYear}-${String(m).padStart(2, '0')}`
+        }));
+
+        const sessionsByMonth = {};
+        const monthTotals = {};
+        semMonths.forEach(m => {
+          sessionsByMonth[m.prefix] = mySessions.filter(s => s.tanggal.startsWith(m.prefix));
+          monthTotals[m.prefix] = { H: 0, I: 0, S: 0, A: 0 };
+        });
+
+        const grandTotalSem = { H: 0, I: 0, S: 0, A: 0 };
+        const matrixSem = students.map(stu => {
+          const byMonth = {};
+          let H = 0, I = 0, S = 0, A = 0;
+
+          semMonths.forEach(m => {
+            const mSess = sessionsByMonth[m.prefix] || [];
+            let mH = 0, mI = 0, mS = 0, mA = 0;
+            mSess.forEach(sess => {
+              const rec = attMap.get(`${sess.id}_${stu.id}`);
+              if (rec && rec.status) {
+                if (rec.status === 'H') { mH++; H++; monthTotals[m.prefix].H++; grandTotalSem.H++; }
+                else if (rec.status === 'I') { mI++; I++; monthTotals[m.prefix].I++; grandTotalSem.I++; }
+                else if (rec.status === 'S') { mS++; S++; monthTotals[m.prefix].S++; grandTotalSem.S++; }
+                else if (rec.status === 'A') { mA++; A++; monthTotals[m.prefix].A++; grandTotalSem.A++; }
+              }
+            });
+            byMonth[m.prefix] = { H: mH, I: mI, S: mS, A: mA };
+          });
+
+          const totalAll = H + I + S + A;
+          const pct = totalAll > 0 ? Math.round((H / totalAll) * 100) : 0;
+          return { stu, byMonth, H, I, S, A, pct };
+        });
+
+        const uniqueSemDays = new Set(mySessions.map(s => s.tanggal)).size;
+
+        content.innerHTML = `
+          <div class="stack">
+            <!-- Filters -->
+            <div class="card" style="padding:0.75rem">
+              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
+                <div class="form-group" style="margin:0;min-width:155px">
+                  <label>Mode Tampilan</label>
+                  <select id="sel-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
+                    <option value="5hari">📋 5 Hari (Semua JP)</option>
+                    <option value="bulanan">📅 1 Bulan (Akumulasi JP)</option>
+                    <option value="semester" selected>🎓 1 Semester (Jul–Des / Jan–Jun)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:95px">
+                  <label>Kelas</label>
+                  <select id="sel-class" class="form-control" style="font-size:0.82rem">
+                    ${classes.map(c=>`<option value="${c.id}" ${String(c.id)===String(selClass)?'selected':''}>${c.nama_kelas}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;flex:1;min-width:170px">
+                  <label>Guru Pengajar</label>
+                  <select id="sel-teacher" class="form-control" style="font-size:0.82rem">
+                    <option value="all" ${selTeacher==='all'?'selected':''}>Semua Guru (${classTeachers.length})</option>
+                    ${classTeachers.map(t => `<option value="${t.id}" ${String(t.id)===String(selTeacher)?'selected':''}>${this._escHtml(t.nama)}${t.mapelInClass ? ` — ${this._escHtml(t.mapelInClass)}` : ''}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:170px">
+                  <label>Semester</label>
+                  <select id="sel-semester" class="form-control" style="font-size:0.82rem">
+                    <option value="ganjil" ${selSemester==='ganjil'?'selected':''}>${SEMESTERS.ganjil.label}</option>
+                    <option value="genap" ${selSemester==='genap'?'selected':''}>${SEMESTERS.genap.label}</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;min-width:75px">
+                  <label>Tahun</label>
+                  <input type="number" id="sel-year" class="form-control" value="${selYear}" style="font-size:0.82rem">
+                </div>
+                <div style="display:flex;gap:0.4rem;margin-left:auto;flex-wrap:wrap">
+                  <button class="btn btn-outline btn-sm" id="btn-refresh-rekap" title="Muat ulang data absensi dari server">🔄 Sync</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-exp-excel" title="Unduh format Excel (.xlsx)">📊 Excel</button>
+                  <button class="btn btn-outline btn-sm" id="btn-exp-csv" title="Unduh format CSV">⬇ CSV</button>
+                  <button class="btn btn-primary btn-sm" id="btn-exp-print" title="Cetak atau simpan sebagai PDF">📄 PDF / Cetak</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Summary Info Badge -->
+            <div class="card" style="padding:0.6rem 0.85rem;background:var(--primary-tint);border-color:#bbf7d0">
+              <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem;font-size:0.75rem">
+                <div>
+                  <b style="color:var(--primary)">🎓 Rekap 1 Semester (Per JP):</b>
+                  <span style="font-weight:600">${semDef.label} ${selYear}</span>
+                  ${activeTeacher ? `<span style="color:var(--primary);font-weight:600;margin-left:0.4rem">• Guru: ${this._escHtml(activeTeacher.nama)}${activeTeacher.mapelInClass ? ` (${this._escHtml(activeTeacher.mapelInClass)})` : ''}</span>` : ''}
+                  <span style="color:var(--text-muted);margin-left:0.5rem">• ${uniqueSemDays} Hari Terisi • Total ${mySessions.length} Jam Pelajaran (JP)</span>
+                </div>
+                <div style="color:var(--text-muted)">
+                  Akumulasi H, I, S, A per bulan selama 1 semester
+                </div>
+              </div>
+            </div>
+
+            <!-- Matrix Table -->
+            ${students.length === 0
+              ? `<div class="empty-state"><p>Tidak ada siswa aktif di kelas ini.</p></div>`
+              : `<div class="table-wrap" id="rekap-table-wrap" style="overflow-x:auto;max-width:100%">
+                <table id="rekap-table" style="min-width:max-content;border-collapse:collapse;font-size:0.74rem">
+                  <thead>
+                    <tr style="background:#f0faf4">
+                      <th rowspan="2" style="min-width:30px;text-align:center;position:sticky;left:0;z-index:3;background:#f0faf4;border:1px solid var(--border)">#</th>
+                      <th rowspan="2" style="min-width:160px;position:sticky;left:30px;z-index:3;background:#f0faf4;border:1px solid var(--border);text-align:left;padding-left:0.5rem">Nama Siswa</th>
+                      ${semMonths.map(m => {
+                        const jpCnt = (sessionsByMonth[m.prefix] || []).length;
+                        return `
+                          <th colspan="4" style="text-align:center;border:1px solid var(--border);border-left:2px solid #bbf7d0;padding:0.35rem 0.4rem;background:#f0faf4;color:var(--primary);font-weight:700">
+                            ${m.name} <span style="font-weight:500;font-size:0.65rem;color:var(--text-muted)">(${jpCnt} JP)</span>
+                          </th>
+                        `;
+                      }).join('')}
+                      <th colspan="5" style="text-align:center;border:1px solid var(--border);border-left:2px solid var(--primary);padding:0.35rem 0.5rem;background:#f0faf4;color:var(--primary);font-weight:700">
+                        Total Semester (JP)
+                      </th>
+                    </tr>
+                    <tr style="background:#f9fafb">
+                      ${semMonths.map(() => `
+                        <th style="min-width:26px;text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid #bbf7d0;padding:3px 2px">H</th>
+                        <th style="min-width:24px;text-align:center;color:var(--izin);border:1px solid var(--border);padding:3px 2px">I</th>
+                        <th style="min-width:24px;text-align:center;color:var(--sakit);border:1px solid var(--border);padding:3px 2px">S</th>
+                        <th style="min-width:24px;text-align:center;color:var(--alpa);border:1px solid var(--border);padding:3px 2px">A</th>
+                      `).join('')}
+                      <th style="min-width:32px;text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary)">H</th>
+                      <th style="min-width:28px;text-align:center;color:var(--izin);border:1px solid var(--border)">I</th>
+                      <th style="min-width:28px;text-align:center;color:var(--sakit);border:1px solid var(--border)">S</th>
+                      <th style="min-width:28px;text-align:center;color:var(--alpa);border:1px solid var(--border)">A</th>
+                      <th style="min-width:38px;text-align:center;color:var(--primary);border:1px solid var(--border)">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${matrixSem.map((row, idx) => `
+                      <tr class="student-row" style="background:${idx % 2 === 0 ? '#ffffff' : '#fcfdfc'}">
+                        <td style="text-align:center;position:sticky;left:0;z-index:1;background:inherit;border:1px solid var(--border)">${idx+1}</td>
+                        <td style="white-space:nowrap;font-weight:600;position:sticky;left:30px;z-index:1;background:inherit;border:1px solid var(--border);padding:0.35rem 0.5rem">${this._escHtml(row.stu.nama_siswa)}</td>
+                        ${semMonths.map(m => {
+                          const c = row.byMonth[m.prefix] || { H:0, I:0, S:0, A:0 };
+                          return `
+                            <td style="text-align:center;border:1px solid var(--border);border-left:2px solid #bbf7d0;color:${c.H>0?'var(--hadir)':'#cbd5e1'};font-weight:${c.H>0?'600':'400'}">${c.H}</td>
+                            <td style="text-align:center;border:1px solid var(--border);color:${c.I>0?'var(--izin)':'#cbd5e1'};font-weight:${c.I>0?'700':'400'}">${c.I}</td>
+                            <td style="text-align:center;border:1px solid var(--border);color:${c.S>0?'var(--sakit)':'#cbd5e1'};font-weight:${c.S>0?'700':'400'}">${c.S}</td>
+                            <td style="text-align:center;border:1px solid var(--border);color:${c.A>0?'var(--alpa)':'#cbd5e1'};font-weight:${c.A>0?'700':'400'}">${c.A}</td>
+                          `;
+                        }).join('')}
+                        <td style="text-align:center;font-weight:700;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary);background:#f0faf4">${row.H}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--izin);border:1px solid var(--border);background:#fffbeb">${row.I}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--sakit);border:1px solid var(--border);background:#eff6ff">${row.S}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--alpa);border:1px solid var(--border);background:#fef2f2">${row.A}</td>
+                        <td style="text-align:center;font-weight:700;color:var(--primary);border:1px solid var(--border)">${row.pct}%</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                  <tfoot>
+                    <tr style="background:#f1f5f3;font-weight:700">
+                      <td colspan="2" style="text-align:right;padding-right:0.75rem;position:sticky;left:0;z-index:1;background:#f1f5f3;border:1px solid var(--border)">
+                        Total (JP):
+                      </td>
+                      ${semMonths.map(m => {
+                        const t = monthTotals[m.prefix] || { H:0, I:0, S:0, A:0 };
+                        return `
+                          <td style="text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid #bbf7d0">${t.H}</td>
+                          <td style="text-align:center;color:var(--izin);border:1px solid var(--border)">${t.I}</td>
+                          <td style="text-align:center;color:var(--sakit);border:1px solid var(--border)">${t.S}</td>
+                          <td style="text-align:center;color:var(--alpa);border:1px solid var(--border)">${t.A}</td>
+                        `;
+                      }).join('')}
+                      <td style="text-align:center;color:var(--hadir);border:1px solid var(--border);border-left:2px solid var(--primary)">${grandTotalSem.H}</td>
+                      <td style="text-align:center;color:var(--izin);border:1px solid var(--border)">${grandTotalSem.I}</td>
+                      <td style="text-align:center;color:var(--sakit);border:1px solid var(--border)">${grandTotalSem.S}</td>
+                      <td style="text-align:center;color:var(--alpa);border:1px solid var(--border)">${grandTotalSem.A}</td>
+                      <td style="text-align:center;color:var(--primary);border:1px solid var(--border)">
+                        ${(grandTotalSem.H + grandTotalSem.I + grandTotalSem.S + grandTotalSem.A) > 0
+                          ? Math.round((grandTotalSem.H / (grandTotalSem.H + grandTotalSem.I + grandTotalSem.S + grandTotalSem.A)) * 100)
+                          : 0}%
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>`
+            }
+          </div>
+        `;
+
+        // Event Listeners for Semester Mode
+        content.querySelector('#sel-mode')?.addEventListener('change', e => { mode = e.target.value; render(); });
+        content.querySelector('#sel-class')?.addEventListener('change', e => { selClass = parseInt(e.target.value); selTeacher = 'all'; render(); });
+        content.querySelector('#sel-teacher')?.addEventListener('change', e => { selTeacher = e.target.value; render(); });
+        content.querySelector('#sel-semester')?.addEventListener('change', e => { selSemester = e.target.value; render(); });
+        content.querySelector('#sel-year')?.addEventListener('change', e => { selYear = parseInt(e.target.value); render(); });
+        content.querySelector('#btn-refresh-rekap')?.addEventListener('click', () => { render(true); });
+
+        // Export Excel (Semester)
+        content.querySelector('#btn-exp-excel')?.addEventListener('click', () => {
+          const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
+          const teacherLabel = activeTeacher ? `${activeTeacher.nama}${activeTeacher.mapelInClass ? ' (' + activeTeacher.mapelInClass + ')' : ''}` : 'Semua Guru';
+          const monthHeaders = semMonths.flatMap(m => [`${m.short} H`, `${m.short} I`, `${m.short} S`, `${m.short} A`]);
+          const rows = [
+            [`REKAPITULASI KEHADIRAN SISWA 1 SEMESTER — MTs PIQ SINGOSARI MALANG`],
+            [`Kelas: ${className} | Guru Pengajar: ${teacherLabel}`],
+            [`Periode: ${semDef.label} ${selYear}`],
+            [],
+            ['No', 'Nama Siswa', ...monthHeaders, 'Total H', 'Total I', 'Total S', 'Total A', '% Hadir'],
+            ...matrixSem.map((row, idx) => [
+              idx + 1,
+              row.stu.nama_siswa,
+              ...semMonths.flatMap(m => {
+                const c = row.byMonth[m.prefix] || { H:0, I:0, S:0, A:0 };
+                return [c.H, c.I, c.S, c.A];
+              }),
+              row.H, row.I, row.S, row.A, `${row.pct}%`
+            ])
+          ];
+          const safeTeacher = activeTeacher ? `_${activeTeacher.kode || 'Guru'}` : '';
+          this._downloadExcelWorkbook([
+            { name: `Semester ${className}`, rows, colWidths: [5, 28, ...monthHeaders.map(() => 7), 9, 9, 9, 9, 9] }
+          ], `Rekap_Semester_${selSemester}_${className}${safeTeacher}_${selYear}.xlsx`);
+        });
+
+        // Export CSV (Semester)
+        content.querySelector('#btn-exp-csv')?.addEventListener('click', () => {
+          const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
+          const monthHeaders = semMonths.flatMap(m => [`${m.short}_H`, `${m.short}_I`, `${m.short}_S`, `${m.short}_A`]).join(',');
+          let csv = `Rekap Kehadiran Siswa 1 Semester ${className} - ${semDef.label} ${selYear}\n`;
+          csv += `No,Nama Siswa,${monthHeaders},Total_H,Total_I,Total_S,Total_A,Persen_Hadir\n`;
+          matrixSem.forEach((row, idx) => {
+            const mVals = semMonths.flatMap(m => {
+              const c = row.byMonth[m.prefix] || { H:0, I:0, S:0, A:0 };
+              return [c.H, c.I, c.S, c.A];
+            }).join(',');
+            csv += `${idx+1},"${row.stu.nama_siswa}",${mVals},${row.H},${row.I},${row.S},${row.A},${row.pct}%\n`;
+          });
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `rekap_semester_${selSemester}_${className}_${selYear}.csv`;
+          a.click();
+        });
+
+        // Print / PDF (Semester)
+        content.querySelector('#btn-exp-print')?.addEventListener('click', () => {
+          const className = classes.find(c=>c.id===parseInt(selClass))?.nama_kelas || '';
+          const tableEl = document.getElementById('rekap-table');
+          if (!tableEl) { alert('Tidak ada data untuk dicetak.'); return; }
+          const teacherSub = activeTeacher
+            ? `Guru Pengajar: ${activeTeacher.nama}${activeTeacher.mapelInClass ? ` (${activeTeacher.mapelInClass})` : ''} • `
+            : '';
+          this._openPrintPdf({
+            title: `Rekap Kehadiran Siswa 1 Semester — Kelas ${className}`,
+            subtitle: `${teacherSub}Periode: ${semDef.label} ${selYear}`,
+            tableHtml: tableEl.outerHTML,
+            rightSignerLabel: activeTeacher ? `Guru Mapel (${activeTeacher.nama})` : `Wali Kelas ${className}`,
+            compact: true
+          });
+        });
+
       } else {
         // ───────────────────────────────────────────
         // MODE 2: REKAP BULANAN (AKUMULASI PER JP DALAM 1 BULAN)
@@ -708,6 +984,7 @@ export const LaporanPage = {
                   <select id="sel-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
                     <option value="5hari">📋 5 Hari (Semua JP)</option>
                     <option value="bulanan" selected>📅 1 Bulan (Akumulasi JP)</option>
+                    <option value="semester">🎓 1 Semester (Jul–Des / Jan–Jun)</option>
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;min-width:95px">
@@ -908,9 +1185,10 @@ export const LaporanPage = {
   _renderLaporanGuru(content) {
     const now = new Date();
     const today = store.todayISO();
-    let mode       = 'bulanan'; // 'bulanan' | 'harian'
+    let mode       = 'bulanan'; // 'bulanan' | 'semester' | 'harian'
     let selDate    = today;
     let selMonth   = now.getMonth() + 1;
+    let selSemester = selMonth >= 7 ? 'ganjil' : 'genap';
     let selYear    = now.getFullYear();
     let selTeacher = 'all'; // 'all' | teacher.id
     let renderToken = 0;
@@ -940,18 +1218,26 @@ export const LaporanPage = {
       const subjectById = new Map(subjects.map(s => [String(s.id), s]));
       const schedById   = new Map(schedules.map(s => [String(s.id), s]));
 
-      if (mode === 'bulanan') {
-        const prefix = `${selYear}-${String(selMonth).padStart(2, '0')}`;
-        const monthSessions = sessions.filter(s => s.tanggal && s.tanggal.startsWith(prefix));
-        const daysInMonth = new Date(selYear, selMonth, 0).getDate();
+      if (mode === 'bulanan' || mode === 'semester') {
+        const isSem = mode === 'semester';
+        const semDef = SEMESTERS[selSemester] || SEMESTERS.ganjil;
+        const targetMonths = isSem ? semDef.months : [selMonth];
+        const prefixes = targetMonths.map(m => `${selYear}-${String(m).padStart(2, '0')}`);
+        const periodTitle = isSem ? `Semester ${semDef.label} ${selYear}` : `${MONTHS[selMonth-1]} ${selYear}`;
+        const periodSlug  = isSem ? `Semester_${selSemester}_${selYear}` : `${MONTHS[selMonth-1]}_${selYear}`;
 
-        // Count how many times each day-name occurs in the selected month
+        const monthSessions = sessions.filter(s => s.tanggal && prefixes.some(p => s.tanggal.startsWith(p)));
+
+        // Count how many times each day-name occurs across targetMonths
         const dayCounts = {};
-        for (let d = 1; d <= daysInMonth; d++) {
-          const dt = new Date(selYear, selMonth - 1, d);
-          const hName = HARI_LABEL[dt.getDay()];
-          dayCounts[hName] = (dayCounts[hName] || 0) + 1;
-        }
+        targetMonths.forEach(mNum => {
+          const daysInMonth = new Date(selYear, mNum, 0).getDate();
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dt = new Date(selYear, mNum - 1, d);
+            const hName = HARI_LABEL[dt.getDay()];
+            dayCounts[hName] = (dayCounts[hName] || 0) + 1;
+          }
+        });
 
         // Build per-teacher monthly summary
         const teacherRecaps = teachers.map(teacher => {
@@ -1043,11 +1329,12 @@ export const LaporanPage = {
             <!-- Filters -->
             <div class="card" style="padding:0.75rem">
               <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end">
-                <div class="form-group" style="margin:0;min-width:150px">
+                <div class="form-group" style="margin:0;min-width:155px">
                   <label>Mode Laporan</label>
                   <select id="sel-guru-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
-                    <option value="bulanan" selected>📊 Rekap Bulanan</option>
-                    <option value="harian">📋 Harian (Per Tanggal)</option>
+                    <option value="bulanan" ${mode==='bulanan'?'selected':''}>📊 Rekap Bulanan</option>
+                    <option value="semester" ${mode==='semester'?'selected':''}>🎓 Rekap 1 Semester</option>
+                    <option value="harian" ${mode==='harian'?'selected':''}>📋 Harian (Per Tanggal)</option>
                   </select>
                 </div>
                 <div class="form-group" style="margin:0;flex:1;min-width:180px">
@@ -1057,12 +1344,22 @@ export const LaporanPage = {
                     ${teachers.map(t => `<option value="${t.id}" ${String(selTeacher)===String(t.id)?'selected':''}>${this._escHtml(t.nama)} (${t.kode})</option>`).join('')}
                   </select>
                 </div>
-                <div class="form-group" style="margin:0;min-width:110px">
-                  <label>Bulan</label>
-                  <select id="sel-guru-month" class="form-control" style="font-size:0.82rem">
-                    ${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===selMonth?'selected':''}>${m}</option>`).join('')}
-                  </select>
-                </div>
+                ${isSem ? `
+                  <div class="form-group" style="margin:0;min-width:165px">
+                    <label>Semester</label>
+                    <select id="sel-guru-semester" class="form-control" style="font-size:0.82rem">
+                      <option value="ganjil" ${selSemester==='ganjil'?'selected':''}>${SEMESTERS.ganjil.label}</option>
+                      <option value="genap" ${selSemester==='genap'?'selected':''}>${SEMESTERS.genap.label}</option>
+                    </select>
+                  </div>
+                ` : `
+                  <div class="form-group" style="margin:0;min-width:110px">
+                    <label>Bulan</label>
+                    <select id="sel-guru-month" class="form-control" style="font-size:0.82rem">
+                      ${MONTHS.map((m,i)=>`<option value="${i+1}" ${i+1===selMonth?'selected':''}>${m}</option>`).join('')}
+                    </select>
+                  </div>
+                `}
                 <div class="form-group" style="margin:0;min-width:80px">
                   <label>Tahun</label>
                   <input type="number" id="sel-guru-year" class="form-control" value="${selYear}" style="font-size:0.82rem">
@@ -1080,8 +1377,8 @@ export const LaporanPage = {
               <div class="card" style="padding:0.65rem 0.85rem;background:var(--primary-tint);border-color:#bbf7d0">
                 <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem;font-size:0.78rem">
                   <div>
-                    <b style="color:var(--primary)">📊 Rekapitulasi Mengajar Guru:</b>
-                    <span style="font-weight:600">${MONTHS[selMonth-1]} ${selYear}</span>
+                    <b style="color:var(--primary)">${isSem ? '🎓 Rekap Mengajar Guru 1 Semester:' : '📊 Rekapitulasi Mengajar Guru:'}</b>
+                    <span style="font-weight:600">${periodTitle}</span>
                     <span style="color:var(--text-muted);margin-left:0.5rem">• ${teachers.length} Guru • ${grandTerisi} / ${grandTarget} JP Terisi (${grandPct}%)</span>
                   </div>
                   <div style="color:var(--text-muted);font-size:0.74rem">
@@ -1143,7 +1440,7 @@ export const LaporanPage = {
                   <div>
                     <div style="font-size:0.92rem;font-weight:700;color:var(--primary)">${this._escHtml(activeRecap.teacher.nama)} (${this._escHtml(activeRecap.teacher.kode)})</div>
                     <div style="font-size:0.74rem;color:var(--text-sub);margin-top:2px">
-                      Periode: <b>${MONTHS[selMonth-1]} ${selYear}</b> • Mapel: ${this._escHtml(activeRecap.mapelText)} • Kelas: ${this._escHtml(activeRecap.kelasText)}
+                      Periode: <b>${periodTitle}</b> • Mapel: ${this._escHtml(activeRecap.mapelText)} • Kelas: ${this._escHtml(activeRecap.kelasText)}
                     </div>
                   </div>
                   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;font-size:0.75rem">
@@ -1156,7 +1453,7 @@ export const LaporanPage = {
 
               <!-- Single Teacher Detail Table -->
               ${activeRecap.sessions.length === 0 ? `
-                <div class="empty-state"><p>Belum ada catatan presensi/jurnal untuk guru ini pada ${MONTHS[selMonth-1]} ${selYear}.</p></div>
+                <div class="empty-state"><p>Belum ada catatan presensi/jurnal untuk guru ini pada ${periodTitle}.</p></div>
               ` : `
                 <div class="table-wrap" style="overflow-x:auto;max-width:100%">
                   <table id="guru-rekap-table" style="width:100%;min-width:max-content;border-collapse:collapse;font-size:0.75rem">
@@ -1229,6 +1526,10 @@ export const LaporanPage = {
           selMonth = parseInt(e.target.value);
           render();
         });
+        content.querySelector('#sel-guru-semester')?.addEventListener('change', e => {
+          selSemester = e.target.value;
+          render();
+        });
         content.querySelector('#sel-guru-year')?.addEventListener('change', e => {
           selYear = parseInt(e.target.value);
           render();
@@ -1237,11 +1538,11 @@ export const LaporanPage = {
 
         // Export Excel (.xlsx)
         content.querySelector('#btn-guru-excel')?.addEventListener('click', () => {
-          const periodLabel = `${MONTHS[selMonth-1]}_${selYear}`;
+          const periodLabel = periodSlug;
           if (!isSingleTeacher) {
             const summaryRows = [
               [`REKAPITULASI MENGAJAR GURU — MTs PIQ SINGOSARI MALANG`],
-              [`Periode: ${MONTHS[selMonth-1]} ${selYear}`],
+              [`Periode: ${periodTitle}`],
               [],
               ['No', 'Kode Guru', 'Nama Guru', 'Mata Pelajaran', 'Kelas', 'Hari Mengajar', 'Target JP', 'JP Terisi', 'Belum Diisi', 'Persentase (%)'],
               ...teacherRecaps.map((r, i) => [
@@ -1252,7 +1553,7 @@ export const LaporanPage = {
             ];
 
             const detailRows = [
-              [`RINCIAN JURNAL & PRESENSI MENGAJAR — ${MONTHS[selMonth-1]} ${selYear}`],
+              [`RINCIAN JURNAL & PRESENSI MENGAJAR — ${periodTitle}`],
               [],
               ['No', 'Tanggal', 'Hari', 'Kode Guru', 'Nama Guru', 'Jam Pelajaran', 'Kelas', 'Mata Pelajaran', 'Materi', 'Catatan Jurnal']
             ];
@@ -1287,14 +1588,14 @@ export const LaporanPage = {
             const summaryRows = [
               [`REKAPITULASI MENGAJAR GURU — MTs PIQ SINGOSARI MALANG`],
               [`Nama Guru: ${activeRecap.teacher.nama} (${activeRecap.teacher.kode})`],
-              [`Periode: ${MONTHS[selMonth-1]} ${selYear}`],
+              [`Periode: ${periodTitle}`],
               [`Mapel: ${activeRecap.mapelText} | Kelas: ${activeRecap.kelasText}`],
               [],
               ['Hari Mengajar', 'Target JP', 'JP Terisi', 'Belum Diisi', 'Persentase (%)'],
               [activeRecap.hariMengajar, activeRecap.targetJP, activeRecap.terisiJP, activeRecap.belumJP, `${activeRecap.pct}%`]
             ];
             const detailRows = [
-              [`RINCIAN MENGAJAR: ${activeRecap.teacher.nama} (${MONTHS[selMonth-1]} ${selYear})`],
+              [`RINCIAN MENGAJAR: ${activeRecap.teacher.nama} (${periodTitle})`],
               [],
               ['No', 'Tanggal', 'Hari', 'Jam Pelajaran', 'Kelas', 'Mata Pelajaran', 'Materi', 'Catatan Jurnal', 'H', 'I', 'S', 'A'],
               ...activeRecap.sessions.map((sess, i) => {
@@ -1328,7 +1629,7 @@ export const LaporanPage = {
           }
           if (!isSingleTeacher) {
             openPrintPdf({
-              title: `Rekapitulasi Mengajar Guru — ${MONTHS[selMonth-1]} ${selYear}`,
+              title: `Rekapitulasi Mengajar Guru — ${periodTitle}`,
               subtitle: `Total ${teachers.length} Guru • ${grandTerisi} / ${grandTarget} JP Terisi (${grandPct}%)`,
               tableHtml: tableEl.outerHTML,
               rightSignerLabel: 'Waka Kurikulum'
@@ -1336,7 +1637,7 @@ export const LaporanPage = {
           } else if (activeRecap) {
             openPrintPdf({
               title: `Rekap Mengajar Guru: ${activeRecap.teacher.nama} (${activeRecap.teacher.kode})`,
-              subtitle: `Periode: ${MONTHS[selMonth-1]} ${selYear} • Terisi: ${activeRecap.terisiJP} / ${activeRecap.targetJP} JP (${activeRecap.pct}%)`,
+              subtitle: `Periode: ${periodTitle} • Terisi: ${activeRecap.terisiJP} / ${activeRecap.targetJP} JP (${activeRecap.pct}%)`,
               tableHtml: tableEl.outerHTML,
               rightSignerLabel: `Guru Mapel (${activeRecap.teacher.nama})`
             });
@@ -1368,6 +1669,7 @@ export const LaporanPage = {
                     <label>Mode Laporan</label>
                     <select id="sel-guru-mode" class="form-control" style="font-size:0.82rem;font-weight:700;color:var(--primary)">
                       <option value="bulanan">📊 Rekap Bulanan</option>
+                      <option value="semester">🎓 Rekap 1 Semester</option>
                       <option value="harian" selected>📋 Harian (Per Tanggal)</option>
                     </select>
                   </div>
