@@ -762,6 +762,228 @@ export const store = {
     ls_set(K.ATTENDANCES, merged);
   },
 
+  /** Create a JSON backup payload for a specific date range */
+  async createBackupPayload({ dateFrom = '', dateTo = '', includeMaster = true, onProgress = null } = {}) {
+    if (onProgress) onProgress('Menyiapkan daftar sesi presensi...');
+    const allSessions = this.getSessions();
+    const targetSessions = allSessions.filter(s => {
+      if (!s.tanggal) return false;
+      if (dateFrom && s.tanggal < dateFrom) return false;
+      if (dateTo && s.tanggal > dateTo) return false;
+      return true;
+    });
+
+    const targetIds = targetSessions.map(s => String(s.id));
+    if (_cloudReady && targetIds.length > 0) {
+      const missingIds = targetIds.filter(id => !_loadedSessionIds.has(id));
+      const chunkSize = 150;
+      for (let i = 0; i < missingIds.length; i += chunkSize) {
+        const chunk = missingIds.slice(i, i + chunkSize);
+        if (onProgress) {
+          onProgress(`Mengunduh detail absensi dari cloud (${Math.min(i + chunk.length, missingIds.length)}/${missingIds.length} sesi)...`);
+        }
+        await this.ensureAttendancesForSessions(chunk);
+      }
+    }
+
+    const targetIdSet = new Set(targetIds);
+    const targetAttendances = this.getAttendances().filter(a => targetIdSet.has(String(a.session_id)));
+
+    const data = {
+      attendance_sessions: targetSessions,
+      attendances: targetAttendances,
+    };
+
+    if (includeMaster) {
+      data.users        = this.getUsers();
+      data.classes      = this.getClasses();
+      data.students     = this.getStudents();
+      data.subjects     = this.getSubjects();
+      data.lesson_hours = this.getJam();
+      data.schedules    = this.getSchedules();
+    }
+
+    return {
+      app: 'Presensi-MTs-PIQ',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      period: {
+        from: dateFrom || 'all',
+        to: dateTo || 'all',
+      },
+      counts: {
+        attendance_sessions: targetSessions.length,
+        attendances: targetAttendances.length,
+        users: data.users?.length || 0,
+        classes: data.classes?.length || 0,
+        students: data.students?.length || 0,
+        subjects: data.subjects?.length || 0,
+        lesson_hours: data.lesson_hours?.length || 0,
+        schedules: data.schedules?.length || 0,
+      },
+      data,
+    };
+  },
+
+  /** Restore a JSON backup payload for a specific date range */
+  async restoreBackupPayload(payload, { dateFrom = '', dateTo = '', mode = 'merge', restoreMaster = false, onProgress = null } = {}) {
+    if (!payload || !payload.data || !Array.isArray(payload.data.attendance_sessions) || !Array.isArray(payload.data.attendances)) {
+      throw new Error('Format file backup tidak valid.');
+    }
+
+    const rawSessions = payload.data.attendance_sessions.filter(s => {
+      if (!s.tanggal) return false;
+      if (dateFrom && s.tanggal < dateFrom) return false;
+      if (dateTo && s.tanggal > dateTo) return false;
+      return true;
+    });
+    const rawSessIdSet = new Set(rawSessions.map(s => String(s.id)));
+    const rawAttendances = payload.data.attendances.filter(a => rawSessIdSet.has(String(a.session_id)));
+
+    let masterRestored = 0;
+
+    if (_cloudReady) {
+      // 1. Optional: restore master tables in dependency order
+      if (restoreMaster) {
+        const masterOrder = [
+          ['users',        K.USERS,     'id'],
+          ['classes',      K.CLASSES,   'id'],
+          ['subjects',     K.SUBJECTS,  'id'],
+          ['lesson_hours', K.JAM,       'id'],
+          ['students',     K.STUDENTS,  'id'],
+          ['schedules',    K.SCHEDULES, 'id'],
+        ];
+        for (const [tbl, lsKey, conflictCol] of masterOrder) {
+          const rows = payload.data[tbl];
+          if (Array.isArray(rows) && rows.length > 0) {
+            if (onProgress) onProgress(`Merestore data master (${tbl}: ${rows.length} baris)...`);
+            for (let i = 0; i < rows.length; i += 200) {
+              const batch = rows.slice(i, i + 200);
+              const { error } = await supaUpsert(tbl, batch, conflictCol);
+              if (error) throw new Error(`Gagal restore ${tbl}: ${error}`);
+            }
+            ls_set(lsKey, rows);
+            masterRestored += rows.length;
+          }
+        }
+      }
+
+      // 2. If mode === 'replace', delete existing sessions & attendances in [dateFrom, dateTo]
+      if (mode === 'replace') {
+        const existingInRange = this.getSessions().filter(s => {
+          if (!s.tanggal) return false;
+          if (dateFrom && s.tanggal < dateFrom) return false;
+          if (dateTo && s.tanggal > dateTo) return false;
+          return true;
+        });
+        const delSessIds = existingInRange.map(s => s.id);
+        if (delSessIds.length > 0) {
+          if (onProgress) onProgress(`Menghapus ${delSessIds.length} sesi lama pada periode terpilih...`);
+          for (let i = 0; i < delSessIds.length; i += 100) {
+            const chunk = delSessIds.slice(i, i + 100);
+            await supaDelete('attendances', 'session_id', chunk);
+            await supaDelete('attendance_sessions', 'id', chunk);
+          }
+        }
+      }
+
+      // 3. Upsert attendance_sessions in chunks of 100 and remap session IDs
+      const sessionIdRemap = new Map();
+      const realSessionIds = [];
+      for (let i = 0; i < rawSessions.length; i += 100) {
+        const batch = rawSessions.slice(i, i + 100).map(s => {
+          const copy = { ...s };
+          delete copy.created_at;
+          return copy;
+        });
+        if (onProgress) {
+          onProgress(`Mengunggah sesi presensi (${Math.min(i + batch.length, rawSessions.length)}/${rawSessions.length})...`);
+        }
+        const { data: savedSess, error } = await supaUpsert('attendance_sessions', batch, 'tanggal,schedule_id');
+        if (error) throw new Error(`Gagal restore sesi presensi: ${error}`);
+        (savedSess || []).forEach(dbS => {
+          const orig = batch.find(b => b.tanggal === dbS.tanggal && String(b.schedule_id) === String(dbS.schedule_id));
+          if (orig) sessionIdRemap.set(String(orig.id), dbS.id);
+          realSessionIds.push(dbS.id);
+        });
+      }
+
+      // 4. Delete existing attendances for target sessions (in merge mode) to avoid duplicates
+      if (mode === 'merge' && realSessionIds.length > 0) {
+        if (onProgress) onProgress(`Membersihkan duplikat absensi untuk ${realSessionIds.length} sesi...`);
+        for (let i = 0; i < realSessionIds.length; i += 100) {
+          await supaDelete('attendances', 'session_id', realSessionIds.slice(i, i + 100));
+        }
+      }
+
+      // 5. Upsert attendances in chunks of 250
+      const remappedAtt = rawAttendances.map(a => {
+        const copy = { ...a };
+        delete copy.created_at;
+        const mappedSessId = sessionIdRemap.get(String(a.session_id));
+        if (mappedSessId !== undefined) copy.session_id = mappedSessId;
+        return copy;
+      });
+
+      for (let i = 0; i < remappedAtt.length; i += 250) {
+        const batch = remappedAtt.slice(i, i + 250);
+        if (onProgress) {
+          onProgress(`Mengunggah detail presensi siswa (${Math.min(i + batch.length, remappedAtt.length)}/${remappedAtt.length})...`);
+        }
+        const { error } = await supaUpsert('attendances', batch, 'id');
+        if (error) throw new Error(`Gagal restore detail presensi: ${error}`);
+      }
+
+      if (onProgress) onProgress('Menyinkronkan ulang data aplikasi...');
+      await this.forceSyncAll();
+
+      return {
+        sessionsRestored: rawSessions.length,
+        attendancesRestored: remappedAtt.length,
+        masterRestored,
+      };
+    } else {
+      // Offline fallback
+      if (restoreMaster) {
+        const mapKeys = [
+          ['users', K.USERS], ['classes', K.CLASSES], ['subjects', K.SUBJECTS],
+          ['lesson_hours', K.JAM], ['students', K.STUDENTS], ['schedules', K.SCHEDULES],
+        ];
+        mapKeys.forEach(([tbl, lsKey]) => {
+          if (Array.isArray(payload.data[tbl])) {
+            ls_set(lsKey, payload.data[tbl]);
+            masterRestored += payload.data[tbl].length;
+          }
+        });
+      }
+
+      let curSessions = this.getSessions();
+      let curAtt = this.getAttendances();
+
+      if (mode === 'replace') {
+        const removedSessIds = new Set(
+          curSessions.filter(s => (!dateFrom || s.tanggal >= dateFrom) && (!dateTo || s.tanggal <= dateTo)).map(s => String(s.id))
+        );
+        curSessions = curSessions.filter(s => !removedSessIds.has(String(s.id)));
+        curAtt = curAtt.filter(a => !removedSessIds.has(String(a.session_id)));
+      } else {
+        const replaceKeys = new Set(rawSessions.map(s => `${s.tanggal}_${s.schedule_id}`));
+        const replacedIds = new Set(curSessions.filter(s => replaceKeys.has(`${s.tanggal}_${s.schedule_id}`)).map(s => String(s.id)));
+        curSessions = curSessions.filter(s => !replaceKeys.has(`${s.tanggal}_${s.schedule_id}`));
+        curAtt = curAtt.filter(a => !replacedIds.has(String(a.session_id)) && !rawSessIdSet.has(String(a.session_id)));
+      }
+
+      ls_set(K.SESSIONS, curSessions.concat(rawSessions));
+      ls_set(K.ATTENDANCES, curAtt.concat(rawAttendances));
+
+      return {
+        sessionsRestored: rawSessions.length,
+        attendancesRestored: rawAttendances.length,
+        masterRestored,
+      };
+    }
+  },
+
   getSessionForSchedule(scheduleId, tanggal) {
     return this.getSessions().find(s => String(s.schedule_id) === String(scheduleId) && s.tanggal === tanggal);
   },

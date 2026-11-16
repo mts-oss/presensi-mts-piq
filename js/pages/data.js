@@ -9,6 +9,7 @@ const TABS = [
   { id:'mapel',  label:'Mata Pelajaran' },
   { id:'jam',    label:'Jam Pelajaran' },
   { id:'jadwal', label:'Jadwal Pelajaran' },
+  { id:'backup', label:'💾 Backup & Restore' },
 ];
 
 const HARI_LIST = ['Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
@@ -126,6 +127,8 @@ export const DataPage = {
 
     if (tab === 'jadwal') {
       this._renderJadwal(content);
+    } else if (tab === 'backup') {
+      this._renderBackupRestore(content);
     } else {
       this._renderTableTab(content, tab);
     }
@@ -850,6 +853,288 @@ export const DataPage = {
     };
 
     modal.classList.add('active');
+  },
+
+  // ==================================
+  // BACKUP & RESTORE (PERIODE TERTENTU)
+  // ==================================
+  _renderBackupRestore(content) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    const pad = n => String(n).padStart(2, '0');
+    const lastDay = (yr, mo) => new Date(yr, mo, 0).getDate();
+
+    let bkFrom = `${y}-${pad(m)}-01`;
+    let bkTo   = `${y}-${pad(m)}-${pad(lastDay(y, m))}`;
+    let parsedBackup = null;
+
+    const countSessionsInRange = (from, to) => {
+      return store.getSessions().filter(s => {
+        if (!s.tanggal) return false;
+        if (from && s.tanggal < from) return false;
+        if (to && s.tanggal > to) return false;
+        return true;
+      }).length;
+    };
+
+    content.innerHTML = `
+      <div class="stack" style="gap:1rem">
+
+        <!-- BACKUP CARD -->
+        <div class="card card-accent" style="padding:1rem">
+          <div class="section-title" style="margin-bottom:0.4rem">
+            💾 Backup Data Aplikasi (Periode Waktu Tertentu)
+          </div>
+          <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.85rem">
+            Unduh salinan data presensi (sesi mengajar, jurnal, & kehadiran siswa) pada rentang tanggal tertentu ke file <code>.json</code> agar aman dan dapat di-restore kapan saja.
+          </p>
+
+          <!-- Preset Periode -->
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.75rem">
+            <button class="btn btn-outline btn-sm bk-preset" data-preset="this-month">Bulan Ini</button>
+            <button class="btn btn-outline btn-sm bk-preset" data-preset="last-month">Bulan Lalu</button>
+            <button class="btn btn-outline btn-sm bk-preset" data-preset="sem-ganjil">Semester Ganjil (Jul–Des)</button>
+            <button class="btn btn-outline btn-sm bk-preset" data-preset="sem-genap">Semester Genap (Jan–Jun)</button>
+            <button class="btn btn-outline btn-sm bk-preset" data-preset="all">Semua Periode</button>
+          </div>
+
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end">
+            <div class="form-group" style="margin:0;min-width:150px">
+              <label>Dari Tanggal</label>
+              <input type="date" id="bk-from" class="form-control" value="${bkFrom}" style="font-size:0.82rem">
+            </div>
+            <div class="form-group" style="margin:0;min-width:150px">
+              <label>Sampai Tanggal</label>
+              <input type="date" id="bk-to" class="form-control" value="${bkTo}" style="font-size:0.82rem">
+            </div>
+            <div style="font-size:0.78rem;color:var(--primary);font-weight:600;padding-bottom:0.45rem" id="bk-preview-count">
+              Ditemukan: ${countSessionsInRange(bkFrom, bkTo)} sesi presensi
+            </div>
+          </div>
+
+          <label style="display:flex;align-items:center;gap:0.45rem;margin-top:0.75rem;font-size:0.78rem;cursor:pointer">
+            <input type="checkbox" id="bk-include-master" checked>
+            <span>Sertakan Data Master (Guru, Siswa, Kelas, Mapel, Jam Pelajaran, Jadwal)</span>
+          </label>
+
+          <div class="row" style="margin-top:0.85rem;gap:0.75rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" id="btn-do-backup">
+              ⬇ Unduh File Backup (.json)
+            </button>
+            <span id="bk-status" style="font-size:0.75rem;color:var(--text-muted)"></span>
+          </div>
+        </div>
+
+        <!-- RESTORE CARD -->
+        <div class="card" style="padding:1rem;border-left:4px solid var(--izin)">
+          <div class="section-title" style="margin-bottom:0.4rem">
+            ♻️ Restore Data dari File Backup
+          </div>
+          <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.85rem">
+            Pilih file backup <code>.json</code> yang pernah diunduh untuk mengembalikan data presensi ke database cloud & lokal pada periode tertentu.
+          </p>
+
+          <div class="form-group" style="margin-bottom:0.75rem">
+            <label>Pilih File Backup (.json)</label>
+            <input type="file" id="rs-file" accept=".json,application/json" class="form-control" style="font-size:0.8rem;padding:0.4rem">
+          </div>
+
+          <div id="rs-preview-box" style="display:none;background:#f8fafc;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.75rem;margin-bottom:0.75rem;font-size:0.78rem">
+            <div id="rs-summary" style="margin-bottom:0.65rem"></div>
+
+            <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:0.65rem">
+              <div class="form-group" style="margin:0;min-width:145px">
+                <label>Restore Dari Tanggal</label>
+                <input type="date" id="rs-from" class="form-control" style="font-size:0.8rem">
+              </div>
+              <div class="form-group" style="margin:0;min-width:145px">
+                <label>Sampai Tanggal</label>
+                <input type="date" id="rs-to" class="form-control" style="font-size:0.8rem">
+              </div>
+              <div class="form-group" style="margin:0;flex:1;min-width:210px">
+                <label>Mode Restore</label>
+                <select id="rs-mode" class="form-control" style="font-size:0.8rem">
+                  <option value="merge">Gabung / Timpa Periode Ini (Upsert — Aman)</option>
+                  <option value="replace">Reset & Ganti Total Data Periode Ini</option>
+                </select>
+              </div>
+            </div>
+
+            <label style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.75rem;font-size:0.76rem;cursor:pointer">
+              <input type="checkbox" id="rs-include-master">
+              <span>Restore Data Master juga (Guru, Siswa, Kelas, Mapel, Jam, Jadwal) — <i>centang hanya jika perlu mengembalikan data master</i></span>
+            </label>
+
+            <div class="row" style="gap:0.75rem;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-warning btn-sm" id="btn-do-restore">
+                ♻️ Restore Data Sekarang
+              </button>
+              <span id="rs-status" style="font-size:0.75rem;color:var(--text-muted)"></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    `;
+
+    const inpFrom = content.querySelector('#bk-from');
+    const inpTo   = content.querySelector('#bk-to');
+    const previewCount = content.querySelector('#bk-preview-count');
+
+    const updateBkCount = () => {
+      bkFrom = inpFrom.value;
+      bkTo   = inpTo.value;
+      const cnt = countSessionsInRange(bkFrom, bkTo);
+      previewCount.textContent = `Ditemukan: ${cnt} sesi presensi`;
+    };
+
+    inpFrom.addEventListener('change', updateBkCount);
+    inpTo.addEventListener('change', updateBkCount);
+
+    content.querySelectorAll('.bk-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.dataset.preset;
+        if (p === 'this-month') {
+          inpFrom.value = `${y}-${pad(m)}-01`;
+          inpTo.value   = `${y}-${pad(m)}-${pad(lastDay(y, m))}`;
+        } else if (p === 'last-month') {
+          const prev = new Date(y, m - 2, 1);
+          const py = prev.getFullYear();
+          const pm = prev.getMonth() + 1;
+          inpFrom.value = `${py}-${pad(pm)}-01`;
+          inpTo.value   = `${py}-${pad(pm)}-${pad(lastDay(py, pm))}`;
+        } else if (p === 'sem-ganjil') {
+          inpFrom.value = `${y}-07-01`;
+          inpTo.value   = `${y}-12-31`;
+        } else if (p === 'sem-genap') {
+          inpFrom.value = `${y}-01-01`;
+          inpTo.value   = `${y}-06-30`;
+        } else if (p === 'all') {
+          inpFrom.value = '';
+          inpTo.value   = '';
+        }
+        updateBkCount();
+      });
+    });
+
+    // Execute Backup
+    content.querySelector('#btn-do-backup').addEventListener('click', async () => {
+      const btn = content.querySelector('#btn-do-backup');
+      const statusEl = content.querySelector('#bk-status');
+      const includeMaster = content.querySelector('#bk-include-master').checked;
+      btn.disabled = true;
+      statusEl.textContent = 'Memproses backup...';
+      try {
+        const payload = await store.createBackupPayload({
+          dateFrom: inpFrom.value,
+          dateTo: inpTo.value,
+          includeMaster,
+          onProgress: msg => { statusEl.textContent = msg; }
+        });
+        const fromTag = inpFrom.value || 'awal';
+        const toTag   = inpTo.value || 'akhir';
+        const filename = `Backup_Presensi_MTs_PIQ_${fromTag}_sd_${toTag}.json`;
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        statusEl.textContent = `✓ Backup selesai (${payload.counts.attendance_sessions} sesi, ${payload.counts.attendances} absensi siswa).`;
+        window._toast && window._toast(`✓ File backup berhasil diunduh: ${filename}`, 'success');
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = '⚠ Gagal membuat backup: ' + (err.message || err);
+        window._toast && window._toast('⚠ Gagal backup: ' + (err.message || err), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // File selection for Restore
+    content.querySelector('#rs-file').addEventListener('change', async e => {
+      const file = e.target.files[0];
+      const box = content.querySelector('#rs-preview-box');
+      if (!file) {
+        box.style.display = 'none';
+        parsedBackup = null;
+        return;
+      }
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        if (!json?.data || !Array.isArray(json.data.attendance_sessions) || !Array.isArray(json.data.attendances)) {
+          throw new Error('Struktur file backup tidak dikenali.');
+        }
+        parsedBackup = json;
+        const pFrom = json.period?.from && json.period.from !== 'all' ? json.period.from : '';
+        const pTo   = json.period?.to && json.period.to !== 'all' ? json.period.to : '';
+        content.querySelector('#rs-from').value = pFrom;
+        content.querySelector('#rs-to').value   = pTo;
+
+        const exportedStr = json.exported_at
+          ? new Date(json.exported_at).toLocaleString('id-ID')
+          : '—';
+        const hasMaster = Boolean(json.data.students?.length || json.data.users?.length);
+
+        content.querySelector('#rs-summary').innerHTML = `
+          <div><b>Info File Backup:</b> Dibuat pada ${this._escHtml(exportedStr)}</div>
+          <div style="margin-top:3px">
+            • Periode File: <b>${pFrom || 'Semua'} s/d ${pTo || 'Semua'}</b>
+            • Sesi Presensi: <b>${json.data.attendance_sessions.length}</b>
+            • Detail Absensi Siswa: <b>${json.data.attendances.length}</b>
+            ${hasMaster ? `• Data Master: <b>Tersedia</b> (${json.data.students?.length || 0} siswa, ${json.data.users?.length || 0} user, ${json.data.schedules?.length || 0} jadwal)` : '• Data Master: <i>Tidak disertakan</i>'}
+          </div>
+        `;
+        const masterChk = content.querySelector('#rs-include-master');
+        masterChk.disabled = !hasMaster;
+        if (!hasMaster) masterChk.checked = false;
+        content.querySelector('#rs-status').textContent = '';
+        box.style.display = 'block';
+      } catch (err) {
+        parsedBackup = null;
+        box.style.display = 'none';
+        alert('File backup tidak valid: ' + (err.message || err));
+      }
+    });
+
+    // Execute Restore
+    content.querySelector('#btn-do-restore').addEventListener('click', async () => {
+      if (!parsedBackup) return alert('Pilih file backup terlebih dahulu.');
+      const rsFrom = content.querySelector('#rs-from').value;
+      const rsTo   = content.querySelector('#rs-to').value;
+      const rsMode = content.querySelector('#rs-mode').value;
+      const rsMaster = content.querySelector('#rs-include-master').checked;
+
+      const modeDesc = rsMode === 'replace'
+        ? 'MENGHAPUS data presensi yang ada pada periode terpilih lalu menggantinya dengan file backup'
+        : 'MENGGABUNGKAN / MENIMPA sesi yang cocok dari file backup';
+      if (!confirm(`Anda yakin ingin melakukan restore?\n\nPeriode: ${rsFrom || 'Awal'} s/d ${rsTo || 'Akhir'}\nMode: ${modeDesc}${rsMaster ? '\n+ Termasuk Data Master' : ''}`)) {
+        return;
+      }
+
+      const btn = content.querySelector('#btn-do-restore');
+      const statusEl = content.querySelector('#rs-status');
+      btn.disabled = true;
+      statusEl.textContent = 'Memulai proses restore...';
+      try {
+        const res = await store.restoreBackupPayload(parsedBackup, {
+          dateFrom: rsFrom,
+          dateTo: rsTo,
+          mode: rsMode,
+          restoreMaster: rsMaster,
+          onProgress: msg => { statusEl.textContent = msg; }
+        });
+        statusEl.textContent = `✓ Restore selesai: ${res.sessionsRestored} sesi, ${res.attendancesRestored} absensi siswa${res.masterRestored ? `, ${res.masterRestored} data master` : ''}.`;
+        window._toast && window._toast(`✓ Restore berhasil (${res.sessionsRestored} sesi, ${res.attendancesRestored} absensi)!`, 'success');
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = '⚠ Gagal restore: ' + (err.message || err);
+        window._toast && window._toast('⚠ Gagal restore: ' + (err.message || err), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
   },
 
   _escHtml(s) {
